@@ -142,7 +142,8 @@ final class UpdateChecker {
         NSApp.activate(ignoringOtherApps: true)
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            NSWorkspace.shared.open(release.download ?? release.page)
+            let target = release.download ?? release.page
+            if target.scheme?.lowercased() == "https" { NSWorkspace.shared.open(target) }
         case .alertThirdButtonReturn:
             UserDefaults.standard.set(release.version, forKey: Self.skippedKey)
         default:

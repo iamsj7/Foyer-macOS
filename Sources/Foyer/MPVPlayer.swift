@@ -132,7 +132,8 @@ final class MPVCore: @unchecked Sendable {
 
     func command(_ args: [String]) {
         onQueue { h in
-            var cargs: [UnsafePointer<CChar>?] = args.map { UnsafePointer(strdup($0)) } + [nil]
+            var cargs: [UnsafePointer<CChar>?] = args.map { UnsafePointer(strdup($0)) }
+            cargs.append(nil)
             defer { cargs.forEach { free(UnsafeMutablePointer(mutating: $0)) } }
             mpv_command(h, &cargs)
         }

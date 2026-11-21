@@ -236,7 +236,9 @@ func mpvOpen(_ url: String, headers: [String: String], timeout: Double) -> (ok: 
     let debug = ProcessInfo.processInfo.environment["NS_MPV_DEBUG"] != nil
     guard mpv_initialize(h) >= 0 else { return (false, "mpv_initialize failed") }
     if debug { mpv_request_log_messages(h, "v") }
-    var cargs: [UnsafePointer<CChar>?] = ["loadfile", url].map { UnsafePointer(strdup($0)) } + [nil]
+    let args: [String] = ["loadfile", url]
+    var cargs: [UnsafePointer<CChar>?] = args.map { UnsafePointer(strdup($0)) }
+    cargs.append(nil)
     mpv_command(h, &cargs)
     cargs.forEach { free(UnsafeMutablePointer(mutating: $0)) }
     let deadline = Date().addingTimeInterval(timeout)

@@ -323,7 +323,10 @@ struct DetailView: View {
     }
 
     @MainActor private func play(_ s: AddonStream) {
-        if let ext = s.externalUrl, let u = URL(string: ext) { NSWorkspace.shared.open(u); return }
+        // A playable stream always plays; a link-out opens in the browser (http(s) only, see WebURL).
+        if s.url == nil, let ext = s.externalUrl, let u = URL(string: ext), WebURL.isAllowed(u) {
+            NSWorkspace.shared.open(u); return
+        }
         guard let url = s.url, let videoId = streamId else { return }
         let resumeOn = UserDefaults.standard.object(forKey: Prefs.resume) as? Bool ?? true
         let addon = groups.first { $0.streams.contains { $0.id == s.id } }?.addon
@@ -461,7 +464,7 @@ struct DetailView: View {
             // "Open In" buttons. Duplicate links are dropped (ForEach identity must be unique).
             let linkOnly = !g.streams.contains { $0.url != nil }
             for s in g.streams where s.url == nil {
-                if linkOnly, let ext = s.externalUrl, let u = URL(string: ext), watchLinks.count < 8 {
+                if linkOnly, let ext = s.externalUrl, let u = URL(string: ext), WebURL.isAllowed(u), watchLinks.count < 8 {
                     watchLinks.append(WatchLink(title: (s.name ?? s.title ?? g.addon.manifest.name).withoutEmoji, url: u))
                 } else if addonTrailer == nil, let yt = s.ytId {
                     addonTrailer = Trailer(title: s.title, ytId: yt).youTubeURL

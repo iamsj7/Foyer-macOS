@@ -433,6 +433,19 @@ public struct Video: Codable, Hashable, Identifiable, Sendable {
 
 // MARK: - Stream
 
+/// The only links Foyer accepts from add-ons: absolute http(s) URLs with a host.
+public enum WebURL {
+    public static func isAllowed(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return false }
+        return !(url.host ?? "").isEmpty
+    }
+    /// The string if it's an allowed web URL, else nil.
+    public static func allowed(_ s: String?) -> String? {
+        guard let s, let u = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)), isAllowed(u) else { return nil }
+        return s
+    }
+}
+
 public struct AddonStream: Codable, Hashable, Identifiable, Sendable {
     public let name: String?
     public let title: String?
@@ -454,10 +467,12 @@ public struct AddonStream: Codable, Hashable, Identifiable, Sendable {
         name = c.lenient(String.self, .name)
         title = c.lenient(String.self, .title)
         description = c.lenient(String.self, .description)
-        url = c.lenient(String.self, .url)
+        // Add-ons are untrusted: only web links are kept. Anything else (file://, custom app schemes,
+        // mpv protocols like edl:// or lavfi://) could open local files or launch other apps.
+        url = WebURL.allowed(c.lenient(String.self, .url))
         infoHash = c.lenient(String.self, .infoHash)
         ytId = c.lenient(String.self, .ytId)
-        externalUrl = c.lenient(String.self, .externalUrl)
+        externalUrl = WebURL.allowed(c.lenient(String.self, .externalUrl))
         behaviorHints = c.lenient(BehaviorHints.self, .behaviorHints)
         quality = StreamQuality(parsing: [name, title, description, behaviorHints?.filename]
             .compactMap { $0 }.joined(separator: " "))
