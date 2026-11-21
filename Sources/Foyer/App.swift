@@ -147,6 +147,8 @@ struct RootView: View {
                 .transition(.asymmetric(insertion: .opacity, removal: .identity))
                 .navigationDestination(for: MetaPreview.self) { DetailView(preview: $0) }
             }
+            // Every page: no toolbar background, soft scroll edge effect (macOS 26), like Apple's apps.
+            .floatingToolbarChrome()
         }
         .focusedSceneValue(\.sidebarSelection, selection)
     }

@@ -119,6 +119,7 @@ struct AttributionsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Acknowledgements")
+        .floatingToolbarChrome()
     }
 
     private func row(_ a: Attribution) -> some View {

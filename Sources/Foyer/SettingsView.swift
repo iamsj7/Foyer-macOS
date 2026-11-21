@@ -64,14 +64,17 @@ struct SettingsPaneView: View {
     let pane: SettingsPane
 
     var body: some View {
-        switch pane {
+        Group {
+            switch pane {
         case .addons: AddonsView()
         case .playback: PlaybackSettings()
         case .subtitles: SubtitleSettings()
         case .library: LibrarySettings()
         case .storage: Form { StorageSection() }.formStyle(.grouped).navigationTitle("Storage")
         case .about: Form { AboutSection() }.formStyle(.grouped).navigationTitle("About")
+            }
         }
+        .floatingToolbarChrome()
     }
 }
 

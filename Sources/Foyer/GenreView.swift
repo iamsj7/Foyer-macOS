@@ -154,6 +154,7 @@ struct GenreView: View {
         }
         .collapsingTitle(route.title)
         .staysClearOfSidebar()
+        .floatingToolbarChrome()
         .overlay { if loading && shelves.isEmpty { ProgressView() } }
         .focusedSceneValue(\.reload, ReloadAction { reloadToken += 1 })   // View ▸ Reload (⌘R)
         .task(id: GenreLoadKey(route: route, catalogs: CatalogKey.lineup(store.addons), token: reloadToken)) { await load() }

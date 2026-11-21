@@ -18,10 +18,22 @@ extension View {
         nativeButtonStyle().buttonBorderShape(.circle)
     }
 
-    /// Keeps a page's drawing inside the detail column. On macOS 26 the detail area runs under the
-    /// floating sidebar, so hover lifts, zooms and shadows near the leading edge would otherwise
-    /// paint behind the sidebar glass. Layout is unaffected (it already respects the safe area).
-    func staysClearOfSidebar() -> some View { clipped() }
+    /// Keeps a page's drawing off the floating sidebar (hover lifts and shadows near the leading
+    /// edge would otherwise paint behind its glass). Only the leading edge is clipped: content must
+    /// still scroll under the toolbar, or the toolbar area shows a solid band instead of the soft
+    /// scroll edge effect.
+    func staysClearOfSidebar() -> some View {
+        mask { Rectangle().ignoresSafeArea(.all, edges: [.top, .bottom, .trailing]) }
+    }
+
+    /// Main-window chrome on macOS 26, as in Apple's apps: the toolbar has no background of its own;
+    /// content scrolls under it and a soft scroll edge effect keeps toolbar items legible.
+    @ViewBuilder func floatingToolbarChrome() -> some View {
+        if #available(macOS 26, *) {
+            toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else { self }
+    }
 
     /// A floating glass surface; thick material before macOS 26.
     @ViewBuilder func glassSurface<S: Shape>(_ shape: S) -> some View {
@@ -29,15 +41,10 @@ extension View {
         else { background(.regularMaterial, in: shape) }
     }
 
-    /// Artwork pages, like the TV app: no title text, no toolbar backing, art runs to the top edge.
+    /// Artwork pages, like the TV app: no title text, art runs to the top edge under the toolbar.
     @ViewBuilder func fullBleedChrome() -> some View {
         if #available(macOS 26, *) {
-            // The art runs under the toolbar and the back button floats on it. The soft edge effect
-            // (a light blur that only builds as content scrolls under the bar) keeps toolbar items
-            // legible, as in the TV app; the hard style would draw a solid band.
-            toolbar(removing: .title)
-                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-                .scrollEdgeEffectStyle(.soft, for: .top)
+            toolbar(removing: .title).floatingToolbarChrome()
         } else if #available(macOS 15, *) {
             toolbar(removing: .title)
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
