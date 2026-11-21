@@ -70,5 +70,5 @@ codesign --verify --strict "$APP"
 ZIP="$DIST/$APP_NAME-$VERSION-macOS-arm64.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
-shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+(cd "$DIST" && shasum -a 256 "$(basename "$ZIP")") | tee "$ZIP.sha256"   # bare name: `shasum -c` works after download
 echo "✅ $ZIP"
