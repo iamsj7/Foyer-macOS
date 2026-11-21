@@ -7,24 +7,168 @@ enum Prefs {
     static let resume = "playback.resume"                       // Bool, default true
     static let nativeOnly = "streamsNativeOnly"                 // Bool, default false (stream table)
     static let subtitleLanguage = "subtitles.preferredLanguage"   // "" = off; same key SubtitleController reads
+    static let settingsTab = "settings.selectedPane"
 }
 
-/// The sidebar's Settings page (also shown for ⌘,): app preferences plus add-on management.
-struct SettingsView: View {
-    @Environment(AddonStore.self) private var store
-    @Environment(LibraryStore.self) private var library
+/// Settings categories. The sidebar page lists them like System Settings; the ⌘, window shows one
+/// toolbar tab per category, like Apple's apps.
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case addons, playback, subtitles, library, storage, about
+    var id: Self { self }
 
+    var title: LocalizedStringKey {
+        switch self {
+        case .addons: "Add-ons"
+        case .playback: "Playback"
+        case .subtitles: "Subtitles"
+        case .library: "Library"
+        case .storage: "Storage"
+        case .about: "About"
+        }
+    }
+    var summary: LocalizedStringKey {
+        switch self {
+        case .addons: "Install, reorder and remove add-ons"
+        case .playback: "Resume and stream preferences"
+        case .subtitles: "Preferred subtitle language"
+        case .library: "Watch history and saved titles"
+        case .storage: "Cache and app data"
+        case .about: "Version, license, updates and acknowledgements"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .addons: "puzzlepiece.extension.fill"
+        case .playback: "play.fill"
+        case .subtitles: "captions.bubble.fill"
+        case .library: "books.vertical.fill"
+        case .storage: "internaldrive.fill"
+        case .about: "info"
+        }
+    }
+    /// The coloured tile behind the symbol, as in System Settings.
+    var tint: Color {
+        switch self {
+        case .addons: .purple
+        case .playback: .red
+        case .subtitles: .blue
+        case .library: .orange
+        case .storage: .gray
+        case .about: .secondary
+        }
+    }
+}
+
+/// One category's page. Add-ons has its own full page; the rest are grouped forms.
+struct SettingsPaneView: View {
+    let pane: SettingsPane
+
+    var body: some View {
+        switch pane {
+        case .addons: AddonsView()
+        case .playback: PlaybackSettings()
+        case .subtitles: SubtitleSettings()
+        case .library: LibrarySettings()
+        case .storage: Form { StorageSection() }.formStyle(.grouped).navigationTitle("Storage")
+        case .about: Form { AboutSection() }.formStyle(.grouped).navigationTitle("About")
+        }
+    }
+}
+
+// MARK: - Sidebar ▸ Settings
+
+/// The sidebar's Settings page: categories listed like System Settings.
+struct SettingsView: View {
+    var body: some View {
+        Form {
+            Section {
+                ForEach(SettingsPane.allCases) { pane in
+                    NavigationLink { SettingsPaneView(pane: pane) } label: { SettingsRow(pane: pane) }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Settings")
+    }
+}
+
+struct SettingsRow: View {
+    let pane: SettingsPane
+    var body: some View {
+        HStack(spacing: 12) {
+            SettingsIcon(pane: pane)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pane.title)
+                Text(pane.summary).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// System Settings–style icon: white symbol on a rounded, coloured tile.
+struct SettingsIcon: View {
+    let pane: SettingsPane
+    var body: some View {
+        Image(systemName: pane.systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
+// MARK: - ⌘, window
+
+/// The Settings window: one toolbar tab per category (the standard Mac settings layout).
+struct SettingsWindow: View {
+    @AppStorage(Prefs.settingsTab) private var selection: SettingsPane = .addons
+
+    var body: some View {
+        TabView(selection: $selection) {
+            ForEach(SettingsPane.allCases) { pane in
+                NavigationStack { SettingsPaneView(pane: pane) }
+                    .tabItem { Label(pane.title, systemImage: pane.systemImage) }
+                    .tag(pane)
+            }
+        }
+        .frame(width: 660, height: 580)
+    }
+}
+
+// MARK: - Panes
+
+struct PlaybackSettings: View {
     @AppStorage(Prefs.resume) private var resume = true
     @AppStorage(Prefs.nativeOnly) private var nativeOnly = false
-    @AppStorage(Prefs.subtitleLanguage) private var subtitleLanguage = ""
-    @State private var confirmClear: ClearAction?
 
-    enum ClearAction: Identifiable {
-        case history, saved
-        var id: Self { self }
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Resume where you left off", isOn: $resume)
+            } footer: {
+                Text("Resume continues on the same source at your last position.")
+            }
+            Section {
+                Toggle("Show only streams that play natively", isOn: $nativeOnly)
+            } footer: {
+                Text("Hides MKV and other formats that open in mpv instead of Apple's player.")
+            }
+            Section("Players") {
+                LabeledContent("Apple's player", value: "MP4, MOV, HLS · HDR, Dolby Vision, Atmos, AirPlay")
+                LabeledContent("mpv", value: "MKV, AVI, WebM and more")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Playback")
     }
+}
 
-    /// Common subtitle languages first; the current choice is always listed even if it's not here.
+struct SubtitleSettings: View {
+    @AppStorage(Prefs.subtitleLanguage) private var subtitleLanguage = ""
+
+    /// Common languages first; the current choice is always listed even if it's not here.
     private var languages: [String] {
         let common = ["en", "es", "fr", "de", "it", "pt-BR", "pt", "nl", "sv", "pl", "tr", "ru",
                       "ar", "hi", "ta", "te", "ur", "ja", "ko", "zh-Hans", "zh-Hant"]
@@ -34,32 +178,6 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                NavigationLink {
-                    AddonsView()
-                } label: {
-                    LabeledContent {
-                        Text("\(store.addons.count) installed").foregroundStyle(.secondary)
-                    } label: {
-                        Label("Add-ons", systemImage: "puzzlepiece.extension")
-                    }
-                }
-            } header: {
-                Text("Add-ons")
-            } footer: {
-                Text("Install, reorder and remove add-ons. Order sets Home rows and stream priority.")
-            }
-
-            Section("Playback") {
-                Toggle("Resume where you left off", isOn: $resume)
-                Toggle("Show only streams that play natively", isOn: $nativeOnly)
-                LabeledContent("Player") {
-                    Text("Apple's player for MP4 and HLS · mpv for MKV and other formats")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                }
-            }
-
-            Section {
                 Picker("Preferred language", selection: $subtitleLanguage) {
                     Text("Off").tag("")
                     Divider()
@@ -67,32 +185,44 @@ struct SettingsView: View {
                         Text(SubtitleLanguage.displayName(code)).tag(code)
                     }
                 }
-            } header: {
-                Text("Subtitles")
             } footer: {
                 Text("Turned on automatically when a subtitle add-on has this language. Change it anytime from the player.")
             }
-
-            Section("Library") {
-                LabeledContent("Saved titles", value: "\(library.saved.count)")
-                LabeledContent("In progress", value: "\(library.continueWatching.count)")
-                HStack {
-                    Button("Clear Watch History…") { confirmClear = .history }
-                        .disabled(library.items.values.allSatisfy { $0.position == 0 })
-                    Button("Remove All Saved Titles…", role: .destructive) { confirmClear = .saved }
-                        .disabled(library.saved.isEmpty)
-                }
-            }
-
-            StorageSection()
-
-            AboutSection()
         }
         .formStyle(.grouped)
-        .navigationTitle("Settings")
-        .confirmationDialog(confirmTitle, isPresented: Binding(get: { confirmClear != nil },
-                                                               set: { if !$0 { confirmClear = nil } }),
-                            presenting: confirmClear) { action in
+        .navigationTitle("Subtitles")
+    }
+}
+
+struct LibrarySettings: View {
+    @Environment(LibraryStore.self) private var library
+    @State private var confirm: ClearAction?
+
+    enum ClearAction: Identifiable {
+        case history, saved
+        var id: Self { self }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Saved titles", value: "\(library.saved.count)")
+                LabeledContent("In progress", value: "\(library.continueWatching.count)")
+            }
+            Section {
+                Button("Clear Watch History…") { confirm = .history }
+                    .disabled(library.items.values.allSatisfy { $0.position == 0 })
+                Button("Remove All Saved Titles…", role: .destructive) { confirm = .saved }
+                    .disabled(library.saved.isEmpty)
+            } footer: {
+                Text("Your library is stored only on this Mac.")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Library")
+        .confirmationDialog(confirm == .saved ? "Remove all saved titles?" : "Clear watch history?",
+                            isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+                            presenting: confirm) { action in
             switch action {
             case .history: Button("Clear Watch History", role: .destructive) { library.clearHistory() }
             case .saved: Button("Remove All Saved Titles", role: .destructive) { library.removeAllSaved() }
@@ -101,9 +231,5 @@ struct SettingsView: View {
             Text(action == .history ? "Continue Watching and resume positions will be reset."
                                     : "Your saved Movies and TV Shows will be removed from the Library.")
         }
-    }
-
-    private var confirmTitle: String {
-        confirmClear == .saved ? "Remove all saved titles?" : "Clear watch history?"
     }
 }

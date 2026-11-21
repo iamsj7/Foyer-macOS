@@ -54,13 +54,12 @@ struct FoyerApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 720)
 
-        // Add-ons live in Settings (⌘,), like the TV app keeps its settings out of the sidebar.
-        // ⌘, opens the same Settings page as the sidebar item.
+        // ⌘, opens the standard Mac settings window: one toolbar tab per category. The sidebar's
+        // Settings page lists the same categories.
         Settings {
-            NavigationStack { SettingsView() }
+            SettingsWindow()
                 .environment(addons)
                 .environment(library)
-                .frame(width: 640, height: 560)
         }
     }
 }

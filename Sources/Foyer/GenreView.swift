@@ -152,10 +152,9 @@ struct GenreView: View {
             }
             .padding(.bottom, 36)
         }
+        .collapsingTitle(route.title)
         .staysClearOfSidebar()
         .overlay { if loading && shelves.isEmpty { ProgressView() } }
-        .navigationTitle(route.title)
-        .titleInContent()   // the large heading above is the visible title
         .focusedSceneValue(\.reload, ReloadAction { reloadToken += 1 })   // View ▸ Reload (⌘R)
         .task(id: GenreLoadKey(route: route, catalogs: CatalogKey.lineup(store.addons), token: reloadToken)) { await load() }
     }

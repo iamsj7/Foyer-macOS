@@ -44,11 +44,12 @@ extension View {
         } else { self }
     }
 
-    /// Pages that show their title as a large heading in the content (TV-app category pages): the
-    /// toolbar shows only the back button. The navigation title still names the window for the
-    /// Window menu and VoiceOver.
-    @ViewBuilder func titleInContent() -> some View {
-        if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
+    /// For a ScrollView whose content starts with a large title heading (TV-app / Music category
+    /// pages, HIG "Navigation bars" large titles): the toolbar title stays hidden while the heading
+    /// is on screen and fades in next to the back button once it scrolls away, so the page is always
+    /// named. Apply directly to the ScrollView. macOS 14 shows the toolbar title all the time.
+    func collapsingTitle(_ title: String, after threshold: CGFloat = 60) -> some View {
+        modifier(CollapsingTitle(title: title, threshold: threshold))
     }
 
     /// Groups nearby glass so it blends and morphs (no-op before macOS 26).
@@ -171,5 +172,42 @@ private struct HoverLift: ViewModifier {
                 }
             }
             .animation(Motion.hover) { $0.scaleEffect(lifted && !reduceMotion ? scale : 1) }
+    }
+}
+
+private struct CollapsingTitle: ViewModifier {
+    let title: String
+    let threshold: CGFloat
+    @State private var scrolledPast = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    geo.contentOffset.y + geo.contentInsets.top > threshold
+                } action: { _, past in
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { scrolledPast = past }
+                }
+                .navigationTitle(title)          // names the window (Window menu, VoiceOver)
+                .toolbar(removing: .title)       // shown by the item below instead, only when scrolled
+                .toolbar {
+                    if #available(macOS 26, *) {
+                        ToolbarItem(placement: .navigation) { titleText }.sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .navigation) { titleText }
+                    }
+                }
+        } else {
+            content.navigationTitle(title)
+        }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(.headline)
+            .lineLimit(1)
+            .opacity(scrolledPast ? 1 : 0)
+            .accessibilityHidden(!scrolledPast)
     }
 }
