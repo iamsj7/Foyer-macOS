@@ -308,6 +308,7 @@ struct FeaturedHero: View {
             }
             .labelStyle(.iconOnly)
             .contentTransition(.symbolEffect(.replace))
+            .symbolEffect(.bounce, value: saved)   // completion feedback when it lands
             .circleGlassButton()
             .controlSize(.extraLarge)
             .glassID("library", in: glass)
@@ -366,7 +367,7 @@ struct FeaturedHero: View {
             }
         }
         // Scoped to the dots: the active capsule stretches on its own spring, apart from the slow crossfade.
-        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.4, bounce: 0.2), value: index)
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.4, bounce: 0), value: index)
         .padding(.horizontal, 12).padding(.vertical, 9)
         .glassSurface(Capsule())
         .opacity(items.count > 1 ? 1 : 0)

@@ -323,7 +323,10 @@ final class MPVHostView: NSView {
         let d = fixedDrawable
         CATransaction.begin()
         CATransaction.setDisableActions(!animated || inLiveResize)
-        if animated { CATransaction.setAnimationDuration(0.25) }
+        if animated {
+            CATransaction.setAnimationDuration(0.35)
+            CATransaction.setAnimationTimingFunction(Motion.layerCurve)
+        }
         metalLayer.contentsScale = scale
         metalLayer.frame = PictureLayout.layerFrame(bounds: bounds, drawable: d, videoAspect: videoAspect,
                                            override: aspectOverride, scaling: scaling,
@@ -561,11 +564,11 @@ struct MPVPlayerScreen: View {
 
                 if controlsVisible && model.failure == nil {
                     MPVControls(model: model, scrubbing: $scrubbing)
-                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+                        .transition(Motion.materialize(reduceMotion))
                 }
             }
         }
-        .animation(.easeOut(duration: 0.25), value: controlsVisible)
+        .animation(Motion.chrome(reduceMotion), value: controlsVisible)
         .animation(.easeOut(duration: 0.3), value: model?.loaded)
         .onContinuousHover { phase in
             // Only real pointer movement counts: SwiftUI also reports hover when the view under a
@@ -657,6 +660,7 @@ struct MPVControls: View {
                         model.togglePause()
                     }
                     .font(.title2)
+                    .contentTransition(.symbolEffect(.replace))
                     .keyboardShortcut(.space, modifiers: [])
                     Button("Forward 10 Seconds", systemImage: "goforward.10") { model.skip(10) }
                     Spacer()

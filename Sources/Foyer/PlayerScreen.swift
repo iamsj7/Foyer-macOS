@@ -402,7 +402,7 @@ struct PlayerScreen: View {
                 }
                 if controlsVisible && model.failure == nil && model.phase == .playing {
                     AVControlsBar(model: model, scrubbing: $scrubbing)
-                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+                        .transition(Motion.materialize(reduceMotion))
                 }
                 if model.failure == nil && model.phase != .playing {
                     LoadingOverlay(request: request, phase: model.phase, progress: model.bufferProgress)
@@ -428,7 +428,7 @@ struct PlayerScreen: View {
             }
         }
         .animation(.easeOut(duration: 0.35), value: model?.phase)
-        .animation(.easeOut(duration: 0.25), value: controlsVisible)
+        .animation(Motion.chrome(reduceMotion), value: controlsVisible)
         // Same behaviour as the mpv window: real pointer movement shows the controls, 3 s of
         // stillness while playing hides them and the cursor. Works whether or not this window is
         // key (watching on one display while working on another).

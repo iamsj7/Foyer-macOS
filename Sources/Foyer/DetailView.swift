@@ -221,6 +221,7 @@ struct DetailView: View {
                     }
                     .labelStyle(.iconOnly)
                     .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: saved)   // completion feedback when it lands
                     .circleGlassButton()
                     .controlSize(.extraLarge)
                     .detailGlassID("library", in: glass)

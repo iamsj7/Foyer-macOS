@@ -105,10 +105,26 @@ struct Artwork: View {
 /// One motion vocabulary for the app. Springs retarget from their current velocity, so hover and
 /// press stay interruptible. Callers pass Reduce Motion to swap movement for a plain fade, or for nothing.
 enum Motion {
+    // Apple's motion rules: springs (interruptible, they start from the on-screen value), critically
+    // damped by default. Bounce is kept for motion that carries momentum; a hover or a click doesn't.
+
     /// Pointer hover lift on cards.
-    static var hover: Animation { .spring(duration: 0.35, bounce: 0.15) }
-    /// Press down is quick and flat. Release has a little bounce, which reads as physical.
-    static func press(_ pressed: Bool) -> Animation { .spring(duration: pressed ? 0.12 : 0.3, bounce: pressed ? 0 : 0.3) }
+    static var hover: Animation { .spring(duration: 0.3, bounce: 0) }
+    /// Press feedback lands on press-down, fast; release settles without overshoot.
+    static func press(_ pressed: Bool) -> Animation { .spring(duration: pressed ? 0.1 : 0.3, bounce: 0) }
+    /// Floating chrome (player control bars) appearing or hiding.
+    static func chrome(_ reduceMotion: Bool) -> Animation { reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0) }
+    /// Glass chrome materializes: blur, scale and opacity together, rising from its own resting
+    /// place and leaving along the same path. Reduce Motion: a plain cross-fade.
+    static func materialize(_ reduceMotion: Bool, anchor: UnitPoint = .bottom) -> AnyTransition {
+        reduceMotion ? .opacity
+            : .opacity
+                .combined(with: .scale(scale: 0.96, anchor: anchor))
+                .combined(with: .offset(y: anchor == .bottom ? 10 : -10))
+                .combined(with: .modifier(active: BlurEffect(radius: 8), identity: BlurEffect(radius: 0)))
+    }
+    /// Core Animation curve matching a critically damped spring (for CALayer moves like picture modes).
+    static let layerCurve = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
     /// Content arriving or leaving (catalog rows, search results, library items).
     static func content(_ reduceMotion: Bool) -> Animation { reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.35) }
     /// Sidebar page switches: brief, so navigation never waits on the animation.
@@ -219,4 +235,10 @@ private struct CollapsingTitle: ViewModifier {
             .opacity(scrolledPast ? 1 : 0)
             .accessibilityHidden(!scrolledPast)
     }
+}
+
+/// Blur as a transition modifier (SwiftUI has no built-in blur transition).
+struct BlurEffect: ViewModifier {
+    let radius: CGFloat
+    func body(content: Content) -> some View { content.blur(radius: radius) }
 }

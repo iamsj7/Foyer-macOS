@@ -32,7 +32,8 @@ struct PlayerLayerRepresentable: NSViewRepresentable {
         let g = model.scaling.avGravity
         if v.playerLayer.videoGravity != g {
             CATransaction.begin()
-            CATransaction.setAnimationDuration(0.25)
+            CATransaction.setAnimationDuration(0.35)
+            CATransaction.setAnimationTimingFunction(Motion.layerCurve)
             v.playerLayer.videoGravity = g
             CATransaction.commit()
         }
@@ -87,6 +88,7 @@ struct AVControlsBar: View {
                         model.togglePause()
                     }
                     .font(.title2)
+                    .contentTransition(.symbolEffect(.replace))
                     .keyboardShortcut(.space, modifiers: [])
                     Button("Forward 10 Seconds", systemImage: "goforward.10") { model.skip(10) }
                     Spacer()
