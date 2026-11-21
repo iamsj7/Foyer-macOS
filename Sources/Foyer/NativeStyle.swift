@@ -26,12 +26,14 @@ extension View {
         mask { Rectangle().ignoresSafeArea(.all, edges: [.top, .bottom, .trailing]) }
     }
 
-    /// Main-window chrome on macOS 26, as in Apple's apps: the toolbar has no background of its own;
-    /// content scrolls under it and a soft scroll edge effect keeps toolbar items legible.
+    /// Main-window chrome on macOS 26, as in Apple's apps. The toolbar's background is left on
+    /// automatic: clear while the page is at the top, and the soft scroll edge effect fades in as
+    /// content scrolls under the toolbar (that effect is the toolbar's background on macOS 26).
+    /// Hiding the toolbar background would switch the effect off and leave toolbar items floating
+    /// over busy content.
     @ViewBuilder func floatingToolbarChrome() -> some View {
         if #available(macOS 26, *) {
-            toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-                .scrollEdgeEffectStyle(.soft, for: .top)
+            scrollEdgeEffectStyle(.soft, for: .top)
         } else { self }
     }
 
