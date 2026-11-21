@@ -18,7 +18,11 @@ Audio, AirPlay, Picture in Picture), with **mpv** as a fallback for MKV and othe
 > you choose to install. The app suggests only legal add-ons (catalogs, metadata, subtitles, trailers)
 > and never suggests stream sources. You're responsible for the add-ons you add and how you use them.
 
-<!-- Screenshots: add docs/images/home.png, title.png, player.png and reference them here. -->
+![Movies: featured hero, genres and Trending Now](docs/images/home.png)
+
+| Title page | Browse Categories |
+|---|---|
+| ![A title page with artwork, ratings, credits and Play](docs/images/title.png) | ![Search with Browse Categories for movies and TV shows](docs/images/browse.png) |
 
 ## Features
 
