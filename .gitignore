@@ -24,3 +24,6 @@ DerivedData/
 # Never commit secrets (add-on manifest URLs can carry tokens)
 .env
 *.env
+
+# Local design work (icon concepts, mockups): never published
+design/
