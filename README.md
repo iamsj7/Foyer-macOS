@@ -1,5 +1,13 @@
 # Foyer
 
+[![Latest release](https://img.shields.io/github/v/release/iamsj7/Foyer-macOS?label=release)](https://github.com/iamsj7/Foyer-macOS/releases/latest)
+[![Build and Release](https://github.com/iamsj7/Foyer-macOS/actions/workflows/release.yml/badge.svg)](https://github.com/iamsj7/Foyer-macOS/actions/workflows/release.yml)
+[![Downloads](https://img.shields.io/github/downloads/iamsj7/Foyer-macOS/total)](https://github.com/iamsj7/Foyer-macOS/releases)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)
+![Apple silicon](https://img.shields.io/badge/Apple%20silicon-arm64-555555)
+![Swift 5.10+](https://img.shields.io/badge/Swift-5.10%2B-F05138?logo=swift&logoColor=white)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
+
 A native macOS media center for Stremio-compatible add-ons, built with SwiftUI and designed after
 Apple's TV app, with Liquid Glass on macOS 26 and later.
 
