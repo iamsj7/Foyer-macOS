@@ -39,7 +39,7 @@ scripts/package-app.sh                                    # dist/*.app + zip
   with" footers). The human author is the only author.
 - Commit or push only when asked. Work on `dev`; `main` is released code.
 - **Every push to `main` with a new version in `AppInfo.version` publishes a GitHub Release**
-  (`.github/workflows/release.yml`). Bump the version and add a `CHANGELOG.md` section only when a
+  (`.github/workflows/release.yml`, the only workflow; it builds on pushes to `main` only). Bump the version and add a `CHANGELOG.md` section only when a
   release is intended.
 
 ## Platform rules

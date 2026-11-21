@@ -1,9 +1,9 @@
-name: Release
+name: Build and Release
 
-# Every push to main publishes a release when the version in Sources/Foyer/About.swift has no
-# v<version> tag yet: it builds Foyer.app, creates the tag and publishes the GitHub Release with the
-# zip, its SHA-256 and that version's CHANGELOG.md section. Pushes that don't change the version do
-# nothing. If the build fails, nothing is tagged or published.
+# The only workflow: runs on pushes to main (dev pushes and pull requests don't build).
+# Every run builds Foyer.app. When the version in Sources/Foyer/About.swift has no v<version> tag
+# yet, it also creates the tag and publishes the GitHub Release with the zip, its SHA-256 and that
+# version's CHANGELOG.md section. If the build fails, nothing is tagged or published.
 on:
   push:
     branches: [main]
@@ -39,11 +39,9 @@ jobs:
           fi
 
       - name: Select latest Xcode
-        if: steps.version.outputs.released == 'false'
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
 
-      - name: Package
-        if: steps.version.outputs.released == 'false'
+      - name: Build and package
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: scripts/package-app.sh "$VERSION"

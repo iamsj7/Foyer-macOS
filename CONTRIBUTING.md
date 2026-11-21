@@ -25,7 +25,8 @@ scripts/check.sh "<manifest URL>" --only catalog  # checks touching what you cha
 
 ## Branches
 
-- `dev` is where work happens; open pull requests against `dev`.
+- `dev` is where work happens; open pull requests against `dev`. GitHub doesn't build `dev` or
+  pull requests, so build and run the relevant checks locally before opening one.
 - `main` holds released code. A version bump in `Sources/Foyer/About.swift` merged into `main`
   publishes a release automatically (see the wiki's Releasing page).
 

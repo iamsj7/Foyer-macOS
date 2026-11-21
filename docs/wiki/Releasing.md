@@ -6,8 +6,8 @@ Foyer releases itself from `main`.
 
 | Branch | Purpose |
 |---|---|
-| `dev` | Everyday work. CI builds every push. |
-| `main` | Released code. Every push is checked for a new version and released automatically. |
+| `dev` | Everyday work. Nothing builds on GitHub; build locally with `scripts/run.sh`. |
+| `main` | Released code. Every push builds on GitHub and releases automatically when the version is new. |
 
 Work on `dev` (or a feature branch with a pull request into `dev`). Merge `dev` into `main` when it's
 ready to ship.
@@ -20,7 +20,7 @@ ready to ship.
 3. The **Release** workflow sees that `v0.2.0` doesn't exist yet. It builds `Foyer.app`, creates the
    `v0.2.0` tag, and publishes the GitHub Release with the zip, its SHA-256 and the changelog section.
 
-Pushes to `main` that don't change the version don't release anything. If the build fails, nothing is
+Pushes to `main` that don't change the version still build (to catch breakage) but don't release. If the build fails, nothing is
 tagged or published. The workflow can also be run by hand from the Actions tab.
 
 Users get the new version through **Foyer ▸ Check for Updates…** (or the automatic daily check).
