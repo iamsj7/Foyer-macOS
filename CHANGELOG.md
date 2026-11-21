@@ -2,7 +2,7 @@
 
 All notable changes are listed here. This project follows [Semantic Versioning](https://semver.org).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-21
 
 First public release.
 
@@ -18,3 +18,7 @@ First public release.
 - Legal add-on suggestions; Cinemeta, TMDB and OpenSubtitles v3 installed on first launch.
 - Settings: playback, subtitles, library, storage, about and acknowledgements.
 - Update checks against GitHub Releases (Foyer ▸ Check for Updates…, automatic once a day).
+
+### Security
+- Only http(s) links from add-ons are accepted, so an add-on can't open local files, launch apps or
+  use mpv's special protocols.

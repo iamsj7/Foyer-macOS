@@ -37,7 +37,10 @@ scripts/package-app.sh                                    # dist/*.app + zip
   add-ons. Suggested add-ons must be catalogs, metadata, subtitles or trailers.
 - **No AI attribution** in commits, PRs, tags or release notes (no `Co-Authored-By`, no "Generated
   with" footers). The human author is the only author.
-- Commit or push only when asked.
+- Commit or push only when asked. Work on `dev`; `main` is released code.
+- **Every push to `main` with a new version in `AppInfo.version` publishes a GitHub Release**
+  (`.github/workflows/release.yml`). Bump the version and add a `CHANGELOG.md` section only when a
+  release is intended.
 
 ## Platform rules
 

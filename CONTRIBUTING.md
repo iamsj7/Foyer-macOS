@@ -23,6 +23,12 @@ scripts/check.sh "<manifest URL>" --only catalog  # checks touching what you cha
 - Never log or print add-on manifest URLs or stream URLs; they can carry private tokens.
 - Comments explain *why* (platform constraints, workarounds), in present tense.
 
+## Branches
+
+- `dev` is where work happens; open pull requests against `dev`.
+- `main` holds released code. A version bump in `Sources/Foyer/About.swift` merged into `main`
+  publishes a release automatically (see the wiki's Releasing page).
+
 ## Pull requests
 
 1. One focused change per PR, with a short description and screenshots for UI changes.
