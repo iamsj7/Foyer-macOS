@@ -6,9 +6,11 @@ import AddonKit
 struct FoyerApp: App {
     @State private var addons = AddonStore()
     @State private var library = LibraryStore()
+    @State private var showWhatsNew = false
 
     init() {
         Disk.migrateOldPreferences()
+        Prefs.migrateStreamFilter()
         // Posters load through URLSession.shared; a big cache makes the second launch instant.
         URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 512 << 20)
         // Running via `swift run` has no app bundle, so make it a normal foreground app.
@@ -24,6 +26,11 @@ struct FoyerApp: App {
                 .onAppear {
                     NSApp.activate(ignoringOtherApps: true)
                     UpdateChecker.shared.checkAutomaticallyIfDue()
+                    if WhatsNew.shouldShowOnLaunch() { showWhatsNew = true }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .showWhatsNew)) { _ in showWhatsNew = true }
+                .sheet(isPresented: $showWhatsNew) {
+                    if let items = WhatsNew.current { WhatsNewSheet(items: items) }
                 }
         }
         .windowToolbarStyle(.unified)
@@ -44,7 +51,7 @@ struct FoyerApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 720)
 
-        // AVPlayer hands streams it can't play to this window ("Play with mpv", or automatically).
+        // AVPlayer hands streams it can't play to this window automatically, at the same position.
         WindowGroup("Player (mpv)", for: MPVRequest.self) { $req in
             if let req {
                 MPVPlayerScreen(request: req.request)

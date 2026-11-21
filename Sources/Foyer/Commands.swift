@@ -42,6 +42,8 @@ struct AppCommands: Commands {
         // run from the build folder doesn't have, so fill it from AppInfo.
         CommandGroup(replacing: .appInfo) {
             Button("About \(AppInfo.name)") { AboutPanel.show() }
+            Button("What's New in \(AppInfo.name)") { NotificationCenter.default.post(name: .showWhatsNew, object: nil) }
+                .disabled(WhatsNew.current == nil)
             Button("Check for Updates…") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
         }
         // View ▸ sections, like the TV app's ⌘1…⌘4, plus Find.

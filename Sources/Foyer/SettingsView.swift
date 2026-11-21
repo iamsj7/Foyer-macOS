@@ -5,7 +5,15 @@ import AddonKit
 /// Preference keys shared by Settings and the views that read them.
 enum Prefs {
     static let resume = "playback.resume"                       // Bool, default true
-    static let nativeOnly = "streamsNativeOnly"                 // Bool, default false (stream table)
+    static let nativeOnly = "streamsNativeOnly"                 // Bool, legacy: replaced by streamPlayer
+    static let streamPlayer = "streams.player"                  // StreamFilters.Player: any / native / mpv
+
+    /// "Show only native streams" became the Player filter; carry the old choice over once.
+    static func migrateStreamFilter() {
+        let d = UserDefaults.standard
+        guard d.object(forKey: streamPlayer) == nil, d.bool(forKey: nativeOnly) else { return }
+        d.set(StreamFilters.Player.native.rawValue, forKey: streamPlayer)
+    }
     static let subtitleLanguage = "subtitles.preferredLanguage"   // "" = off; same key SubtitleController reads
     static let settingsTab = "settings.selectedPane"
 }
@@ -144,7 +152,7 @@ struct SettingsWindow: View {
 
 struct PlaybackSettings: View {
     @AppStorage(Prefs.resume) private var resume = true
-    @AppStorage(Prefs.nativeOnly) private var nativeOnly = false
+    @AppStorage(Prefs.streamPlayer) private var player: StreamFilters.Player = .any
 
     var body: some View {
         Form {
@@ -154,9 +162,11 @@ struct PlaybackSettings: View {
                 Text("Resume continues on the same source at your last position.")
             }
             Section {
-                Toggle("Show only streams that play natively", isOn: $nativeOnly)
+                Picker("Stream list shows", selection: $player) {
+                    ForEach(StreamFilters.Player.allCases) { Text($0 == .any ? "All Streams" : "\($0.title) Streams").tag($0) }
+                }
             } footer: {
-                Text("Hides MKV and other formats that open in mpv instead of Apple's player.")
+                Text("The same choice as the Player filter above a title's streams.")
             }
             Section("Players") {
                 LabeledContent("Apple's player", value: "MP4, MOV, HLS · HDR, Dolby Vision, Atmos, AirPlay")

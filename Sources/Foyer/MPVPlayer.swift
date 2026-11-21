@@ -7,8 +7,8 @@ import AddonKit
 
 // MARK: - Routing
 
-/// Opens an mpv player window for a stream: "Play with mpv" on AVPlayer's failure screen, or the
-/// automatic hand-off when AVPlayer can't decode the video.
+/// Opens an mpv player window for a stream that AVPlayer handed off automatically (it couldn't open
+/// the stream, or it can play the audio but not the video).
 struct MPVRequest: Codable, Hashable {
     let request: PlayRequest
 }
@@ -528,6 +528,8 @@ final class MPVPlayerModel: PlaybackControls {
 struct MPVPlayerScreen: View {
     let request: PlayRequest
     @Environment(LibraryStore.self) private var library
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: MPVPlayerModel?
     @State private var controlsVisible = true
@@ -611,6 +613,16 @@ struct MPVPlayerScreen: View {
             model = m
         }
         .onDisappear { model?.stop(library: library) }
+        // The stream failed to open: move on to the next source (best quality first) at the same
+        // position, and make it the Resume source. With no fallbacks left, the error stays.
+        .onChange(of: model?.failure != nil) { _, failed in
+            guard failed, let model, let next = request.alternates.first else { return }
+            library.rememberSource(next, for: request)
+            let position = model.position > 1 ? model.position : request.startAt
+            openWindow(value: request.switching(to: next, at: position,
+                                                note: "That source didn't load, so Foyer moved to the next best one."))
+            dismissWindow()
+        }
     }
 
     private func poke() {
@@ -734,6 +746,10 @@ struct MPVLoadingBadge: View {
             } else {
                 ProgressView().controlSize(.large)
                 Text("Opening with mpv · \(host)…").font(.callout).foregroundStyle(.secondary)
+                if let note = request.note {
+                    Label(note, systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .padding(24)

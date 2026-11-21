@@ -180,6 +180,11 @@ final class LibraryStore {
         persist()
     }
 
+    /// The player moved to a fallback source: Resume should use the one that actually plays.
+    func rememberSource(_ source: SavedSource, for req: PlayRequest) {
+        rememberSource(source, for: MetaPreview(id: req.titleId, type: req.type, name: req.titleName, poster: req.poster))
+    }
+
     func resumePosition(titleId: String, videoId: String) -> Double {
         guard let i = items[titleId], i.lastVideoId == videoId, i.isInProgress else { return 0 }
         return i.position
@@ -229,4 +234,26 @@ struct PlayRequest: Codable, Hashable {
     let subtitle: String
     let poster: String?
     let startAt: Double
+    /// The next sources to try, best quality first, if this one fails to load.
+    var alternates: [SavedSource] = []
+    /// Shown while loading (e.g. "Your last source didn't respond; playing the best one that did.").
+    var note: String? = nil
+
+    /// This request at another position (same source and fallbacks).
+    func at(_ position: Double) -> PlayRequest {
+        var r = PlayRequest(url: url, headers: headers, titleId: titleId, videoId: videoId, type: type,
+                            titleName: titleName, subtitle: subtitle, poster: poster, startAt: position)
+        r.alternates = alternates
+        r.note = note
+        return r
+    }
+
+    /// The same title and position on another source; the rest of the list stays as fallbacks.
+    func switching(to next: SavedSource, at position: Double, note: String?) -> PlayRequest {
+        var r = PlayRequest(url: next.url, headers: next.headers, titleId: titleId, videoId: videoId, type: type,
+                            titleName: titleName, subtitle: subtitle, poster: poster, startAt: position)
+        r.alternates = alternates.filter { $0.url != next.url }
+        r.note = note
+        return r
+    }
 }

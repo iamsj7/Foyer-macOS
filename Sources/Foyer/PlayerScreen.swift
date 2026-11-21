@@ -412,12 +412,6 @@ struct PlayerScreen: View {
                     ContentUnavailableView {
                         Label("Can't Play This Stream", systemImage: "exclamationmark.triangle")
                     } description: { Text(f) } actions: {
-                        Button("Play with mpv", systemImage: "play.fill") {
-                            openWindow(value: MPVRequest(request: request))
-                            dismissWindow()
-                        }
-                        .nativeButtonStyle(prominent: true)
-                        .controlSize(.large)
                         Button("Close") { dismissWindow() }
                             .keyboardShortcut(.cancelAction)
                             .controlSize(.large)
@@ -463,9 +457,18 @@ struct PlayerScreen: View {
         .onChange(of: model?.needsMPV == true) { _, needs in
             guard needs, let model else { return }
             let r = request
-            openWindow(value: MPVRequest(request: PlayRequest(
-                url: r.url, headers: r.headers, titleId: r.titleId, videoId: r.videoId, type: r.type,
-                titleName: r.titleName, subtitle: r.subtitle, poster: r.poster, startAt: model.currentSeconds)))
+            openWindow(value: MPVRequest(request: r.at(model.currentSeconds)))
+            dismissWindow()
+        }
+        // Apple's player couldn't open the stream: hand the same source to mpv at the same position,
+        // automatically (mpv plays far more formats). If mpv can't either, it moves on to the next
+        // source itself, best quality first. No choice is ever put to the user.
+        .onChange(of: model?.failure != nil) { _, failed in
+            guard failed, let model else { return }
+            let position = model.currentSeconds > 1 ? model.currentSeconds : request.startAt
+            var handoff = request.at(position)
+            handoff.note = "Apple's player couldn't open this stream, so Foyer opened it with mpv."
+            openWindow(value: MPVRequest(request: handoff))
             dismissWindow()
         }
         .focusedSceneValue(\.playback, model)
@@ -511,6 +514,10 @@ struct LoadingOverlay: View {
                     Text(request.titleName).font(.title.bold())
                     if !request.subtitle.isEmpty {
                         Text(request.subtitle).font(.title3).foregroundStyle(.secondary)
+                    }
+                    if let note = request.note {
+                        Label(note, systemImage: "arrow.triangle.2.circlepath")
+                            .font(.callout).foregroundStyle(.secondary).padding(.top, 6)
                     }
                 }
                 .multilineTextAlignment(.center)

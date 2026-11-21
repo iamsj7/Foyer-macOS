@@ -61,33 +61,74 @@ struct DetailView: View {
     }
     /// Auto-play order: streams Apple's player opens first (best quality first), then the ones mpv
     /// plays, best first. Play checks them in this order and starts the first that responds.
+    /// Every playable stream, highest quality first, whichever player it needs. At equal quality,
+    /// Apple's player wins (HDR, AirPlay, PiP). Play, Resume fallbacks and in-player retries all use
+    /// this order.
     private var playCandidates: [AddonStream] {
-        let all = groups.flatMap(\.streams).filter { $0.url != nil }
-        let native = all.filter { $0.likelyNative != false }
-            .sorted { a, b in
-                let na = a.likelyNative == true, nb = b.likelyNative == true
-                return na != nb ? na : effective(b) < effective(a)
-            }
-        let mpv = all.filter { $0.likelyNative == false }.sorted { a, b in effective(b) < effective(a) }
-        return native + mpv
+        groups.flatMap(\.streams).filter { $0.url != nil }.sorted { a, b in
+            let qa = effective(a), qb = effective(b)
+            if qa.score != qb.score { return qa.score > qb.score }
+            return (a.likelyNative == true ? 0 : 1) < (b.likelyNative == true ? 0 : 1)
+        }
+    }
+
+    private func savedSource(_ s: AddonStream) -> SavedSource? {
+        guard let url = s.url, let videoId = streamId else { return nil }
+        let addon = groups.first { $0.streams.contains { $0.id == s.id } }?.addon
+        return SavedSource(url: url, headers: s.requestHeaders, addonId: addon?.id ?? "",
+                           addonName: addon?.manifest.name ?? "", name: s.name, label: s.label, videoId: videoId)
     }
 
     @MainActor private func autoPlay() {
-        let ordered = Array(playCandidates.prefix(24))
-        let candidates = ordered.compactMap { s in
-            s.url.flatMap(URL.init(string:)).map { SourceCheck.Candidate(id: s.id, url: $0, headers: s.requestHeaders) }
+        let resumeOn = UserDefaults.standard.object(forKey: Prefs.resume) as? Bool ?? true
+        let start = resumeOn ? streamId.map { library.resumePosition(titleId: preview.id, videoId: $0) } ?? 0 : 0
+        startPlayback(preferred: nil, startAt: start)
+    }
+
+    /// Checks sources and opens the player on the first that responds. With `preferred` (Resume /
+    /// Start Over), that source is tried first; if it's dead, the rest are checked best quality
+    /// first. The sources after the one that plays go with it as in-player fallbacks.
+    @MainActor private func startPlayback(preferred: SavedSource?, startAt: Double) {
+        let ranked = playCandidates.compactMap(savedSource)
+        var order = ranked
+        if let p = preferred {
+            order.removeAll { $0.url == p.url }
+            order.insert(p, at: 0)
         }
-        guard !candidates.isEmpty else { return }
+        order = Array(order.prefix(24))
+        guard !order.isEmpty else { return }
+        let candidates = order.compactMap { s in
+            URL(string: s.url).map { SourceCheck.Candidate(id: s.url, url: $0, headers: s.headers) }
+        }
         probeToken = nil   // stop background measuring; it competes with the check
         checkingSources = (0, candidates.count)
         autoPlayTask = Task { @MainActor in
-            let found = await SourceCheck.firstAvailable(candidates) { done in
-                await MainActor.run { if checkingSources != nil { checkingSources = (done, candidates.count) } }
+            // The preferred source alone first, so a working "last source" is never skipped for a
+            // faster-answering one.
+            var found: String?
+            var note: String?
+            if let p = preferred, let first = candidates.first {
+                if await SourceCheck.isAvailable(first) { found = p.url }
+                else if candidates.count > 1 {
+                    note = "Your last source didn't respond, so Foyer picked the best one that did."
+                }
+                if checkingSources != nil { checkingSources = (1, candidates.count) }
+            }
+            if found == nil, !Task.isCancelled {
+                let rest = preferred == nil ? candidates : Array(candidates.dropFirst())
+                let offset = preferred == nil ? 0 : 1
+                found = await SourceCheck.firstAvailable(rest) { done in
+                    await MainActor.run { if checkingSources != nil { checkingSources = (done + offset, candidates.count) } }
+                }
             }
             guard !Task.isCancelled else { return }
             checkingSources = nil
-            if let id = found, let s = ordered.first(where: { $0.id == id }) { play(s) }
-            else { noSourceResponded = true }
+            guard let url = found, let i = order.firstIndex(where: { $0.url == url }) else {
+                noSourceResponded = true
+                return
+            }
+            openPlayer(order[i], episode: selectedVideo, startAt: startAt,
+                       alternates: Array(order[(i + 1)...].prefix(12)), note: note)
         }
     }
 
@@ -328,24 +369,27 @@ struct DetailView: View {
         if s.url == nil, let ext = s.externalUrl, let u = URL(string: ext), WebURL.isAllowed(u) {
             NSWorkspace.shared.open(u); return
         }
-        guard let url = s.url, let videoId = streamId else { return }
+        guard let chosen = savedSource(s) else { return }
         let resumeOn = UserDefaults.standard.object(forKey: Prefs.resume) as? Bool ?? true
-        let addon = groups.first { $0.streams.contains { $0.id == s.id } }?.addon
-        openPlayer(SavedSource(url: url, headers: s.requestHeaders, addonId: addon?.id ?? "",
-                               addonName: addon?.manifest.name ?? "", name: s.name, label: s.label, videoId: videoId),
-                   episode: selectedVideo,
-                   startAt: resumeOn ? library.resumePosition(titleId: preview.id, videoId: videoId) : 0)
+        let fallbacks = playCandidates.compactMap(savedSource).filter { $0.url != chosen.url }
+        openPlayer(chosen, episode: selectedVideo,
+                   startAt: resumeOn ? library.resumePosition(titleId: preview.id, videoId: chosen.videoId) : 0,
+                   alternates: Array(fallbacks.prefix(12)))
     }
 
     /// Opens the player and remembers the source, so Resume can continue on it later.
-    @MainActor private func openPlayer(_ source: SavedSource, episode: Video?, startAt: Double) {
+    @MainActor private func openPlayer(_ source: SavedSource, episode: Video?, startAt: Double,
+                                       alternates: [SavedSource] = [], note: String? = nil) {
         let sub = isSeries ? "S\(episode?.season ?? 0)E\(episode?.episode ?? 0) · \(episode?.title ?? "")" : ""
         probeToken = nil
         library.rememberSource(source, for: meta?.preview ?? preview)
-        openWindow(value: PlayRequest(
+        var request = PlayRequest(
             url: source.url, headers: source.headers, titleId: preview.id, videoId: source.videoId, type: preview.type,
             titleName: meta?.name ?? preview.name, subtitle: sub, poster: meta?.poster ?? preview.poster,
-            startAt: startAt))
+            startAt: startAt)
+        request.alternates = alternates
+        request.note = note
+        openWindow(value: request)
     }
 
     // MARK: Resume
@@ -366,6 +410,18 @@ struct DetailView: View {
 
     /// Same stream as last time. Prefer the add-on's fresh copy (links with expiring tokens get
     /// re-issued): same URL, else same add-on + name + label. Otherwise the saved link itself.
+    /// Resume and Start Over: check the last source first; if it's gone, the best one that answers.
+    /// When the list on screen is for another episode there's nothing to fall back to, so the last
+    /// source opens as before.
+    @MainActor private func resumeOrStartOver(_ r: ResumeState, startAt: Double) {
+        let last = freshSource(for: r.source)
+        if last.videoId == streamId, !groups.isEmpty {
+            startPlayback(preferred: last, startAt: startAt)
+        } else {
+            openPlayer(last, episode: r.episode, startAt: startAt)
+        }
+    }
+
     private func freshSource(for saved: SavedSource) -> SavedSource {
         guard saved.videoId == streamId else { return saved }   // list on screen is for another episode
         for g in groups where g.addon.id == saved.addonId || saved.addonId.isEmpty {
@@ -381,7 +437,7 @@ struct DetailView: View {
 
     @ViewBuilder private func resumeButtons(_ r: ResumeState) -> some View {
         Button {
-            openPlayer(freshSource(for: r.source), episode: r.episode, startAt: r.item.position)
+            resumeOrStartOver(r, startAt: r.item.position)
         } label: {
             Label("Resume" + (r.episodeLabel.map { " \($0)" } ?? ""), systemImage: "play.fill").padding(.horizontal, 10)
         }
@@ -392,7 +448,7 @@ struct DetailView: View {
         .help("Continue on \((r.source.name ?? r.source.addonName).withoutEmoji)" + (r.source.label.isEmpty ? "" : " · " + r.source.label.withoutEmoji.prefix(80)))
 
         Button("Start Over", systemImage: "arrow.counterclockwise") {
-            openPlayer(freshSource(for: r.source), episode: r.episode, startAt: 0)
+            resumeOrStartOver(r, startAt: 0)
         }
         .labelStyle(.iconOnly)
         .circleGlassButton()
@@ -520,9 +576,8 @@ struct StreamsSection: View {
 
     @State private var sortOrder = [KeyPathComparator(\StreamTableRow.score, order: .reverse)]
     @State private var selection: StreamTableRow.ID?
-    @AppStorage(Prefs.nativeOnly) private var nativeOnly = false
-    /// nil shows every add-on's streams.
-    @State private var addonFilter: String?
+    @State private var filters = StreamFilters()
+    @AppStorage(Prefs.streamPlayer) private var player: StreamFilters.Player = .any
 
     /// Add-ons that returned streams, in the user's add-on order.
     private var sources: [(id: String, name: String, count: Int)] {
@@ -541,10 +596,11 @@ struct StreamsSection: View {
     }
 
     var body: some View {
-        let filter = sources.contains { $0.id == addonFilter } ? addonFilter : nil
-        let all = makeRows().filter { filter == nil || $0.addonId == filter }
-        let rows = all.filter { !nativeOnly || $0.nativeRank < 2 }.sorted(using: sortOrder)
-        let known = all.filter { $0.quality.isKnown }
+        let all = makeRows()
+        let active = effectiveFilters
+        let rows = all.filter { active.matches($0, player: player) }.sorted(using: sortOrder)
+        // "Best" markers describe what's on screen, so they follow the filters.
+        let known = rows.filter { $0.quality.isKnown }
         let best = Bests(
             overall: known.max { $0.quality < $1.quality }?.id,
             video: known.max { ($0.videoScore, $0.mbps) < ($1.videoScore, $1.mbps) }?.id,
@@ -562,30 +618,28 @@ struct StreamsSection: View {
                         .font(.callout).foregroundStyle(.secondary)
                         .help("Specs read from the stream itself (HLS playlist or media tracks), not just its label")
                 }
-                Spacer()
-                if sources.count > 1 {
-                    Picker("Add-on", selection: $addonFilter) {
-                        Text("All Add-ons").tag(String?.none)
-                        Divider()
-                        ForEach(sources, id: \.id) { src in
-                            Text("\(src.name) (\(src.count))").tag(Optional(src.id))
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    .help("Show streams from one add-on")
-                }
-                Toggle("Native only", isOn: $nativeOnly)
-                    .toggleStyle(.checkbox)
-                    .help("Hide MKV and other streams Apple's player can't open yet")
+            }
+
+            if !all.isEmpty {
+                StreamFilterBar(filters: $filters, player: $player, sources: sources,
+                                shown: rows.count, total: all.count)
             }
 
             if rows.isEmpty && !loading {
-                ContentUnavailableView("No Streams Found", systemImage: "play.slash",
-                                       description: Text(filter != nil ? "This add-on has no matching streams. Choose “All Add-ons”."
-                                                          : nativeOnly ? "Turn off “Native only” to see every stream."
-                                                                       : "Add a stream add-on in Settings (⌘,)."))
+                if !all.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Matching Streams", systemImage: "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text("None of the \(all.count) streams match these filters.")
+                    } actions: {
+                        Button("Clear Filters") { filters = StreamFilters(); player = .any }
+                    }
                     .frame(maxWidth: .infinity)
+                } else {
+                    ContentUnavailableView("No Streams Found", systemImage: "play.slash",
+                                           description: Text("Add a stream add-on in Settings (⌘,)."))
+                        .frame(maxWidth: .infinity)
+                }
             } else {
                 table(rows, best: best)
                     .frame(height: min(CGFloat(max(rows.count, 4)) * 46 + 30, 600))
@@ -598,6 +652,13 @@ struct StreamsSection: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The filters in force: an add-on filter is dropped once that add-on has no streams here.
+    private var effectiveFilters: StreamFilters {
+        var f = filters
+        if let a = f.addon, !sources.contains(where: { $0.id == a }) { f.addon = nil }
+        return f
     }
 
     struct Bests { let overall, video, audio, native: String? }
