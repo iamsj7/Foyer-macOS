@@ -4,7 +4,7 @@ import AppKit
 /// App identity in one place: rename the app or change the license here.
 enum AppInfo {
     static let name = "Foyer"
-    static let version = "0.2.0"
+    static let version = "0.2.1"
     static let author = "Shaik Jaleel"
     static let year = "2026"
     static let license = "GNU General Public License v3.0 or later"

@@ -2,6 +2,13 @@
 
 All notable changes are listed here. This project follows [Semantic Versioning](https://semver.org).
 
+## [0.2.1] - 2026-11-22
+
+### Fixed
+- Foyer no longer crashes when an audio device connects or disconnects (headphones, AirPods,
+  AirPlay, a display going to sleep) after playing in the mpv player. mpv now uses the AVFoundation
+  audio output, which follows the system output on its own.
+
 ## [0.2.0] - 2026-11-21
 
 ### Added
