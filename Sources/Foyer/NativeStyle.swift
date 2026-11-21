@@ -44,6 +44,13 @@ extension View {
         } else { self }
     }
 
+    /// Pages that show their title as a large heading in the content (TV-app category pages): the
+    /// toolbar shows only the back button. The navigation title still names the window for the
+    /// Window menu and VoiceOver.
+    @ViewBuilder func titleInContent() -> some View {
+        if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
+    }
+
     /// Groups nearby glass so it blends and morphs (no-op before macOS 26).
     @ViewBuilder func glassGroup(spacing: CGFloat = 12) -> some View {
         if #available(macOS 26, *) { GlassEffectContainer(spacing: spacing) { self } } else { self }
