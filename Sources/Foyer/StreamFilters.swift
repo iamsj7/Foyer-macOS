@@ -42,15 +42,16 @@ struct StreamFilters: Equatable {
             }
         }
     }
-    /// Stored as a preference (Settings ▸ Playback shows the same choice).
+    /// "Features": streams that support AirPlay and Picture in Picture (they play in Apple's
+    /// player). Which player plays a stream is otherwise automatic and never shown. Stored as a
+    /// preference; the legacy "mpv" value reads as "all".
     enum Player: String, CaseIterable, Identifiable {
-        case any, native, mpv
+        case any, native
         var id: Self { self }
         var title: String {
             switch self {
-            case .any: "Any Player"
-            case .native: "Apple's Player"
-            case .mpv: "mpv"
+            case .any: "All Streams"
+            case .native: "AirPlay & Picture in Picture"
             }
         }
     }
@@ -83,11 +84,7 @@ struct StreamFilters: Equatable {
         case .surround51: guard q.channels == "5.1" else { return false }
         case .stereo: guard q.channels == "2.0" || q.channels == "Stereo" else { return false }
         }
-        switch player {
-        case .any: break
-        case .native: guard r.nativeRank < 2 else { return false }   // Apple's player, or unknown (try it)
-        case .mpv: guard r.nativeRank == 2 else { return false }
-        }
+        if player == .native, r.nativeRank == 2 { return false }   // these play without AirPlay / PiP
         if let addon, r.addonId != addon { return false }
         return true
     }
@@ -124,8 +121,8 @@ struct StreamFilterBar: View {
                  help: "Show only Dolby Vision, HDR10 or SDR streams") { filters.hdr = $0 }
             chip("Audio", value: filters.audio, all: StreamFilters.Audio.allCases, title: \.title,
                  help: "Show only streams with this audio format or channel layout") { filters.audio = $0 }
-            chip("Player", value: player, all: StreamFilters.Player.allCases, title: \.title,
-                 help: "Apple's player: MP4 and HLS with HDR, Dolby Vision, Atmos, AirPlay. mpv: MKV and other formats.") { player = $0 }
+            chip("Features", value: player, all: StreamFilters.Player.allCases, title: \.title,
+                 help: "Show only streams you can AirPlay to a TV or watch in Picture in Picture") { player = $0 }
             if sources.count > 1 { addonChip }
             if filters.isActive(player: player) {
                 Button("Clear Filters") {

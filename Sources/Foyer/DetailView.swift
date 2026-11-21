@@ -389,6 +389,7 @@ struct DetailView: View {
             startAt: startAt)
         request.alternates = alternates
         request.note = note
+        request.sourceText = source.qualityText
         openWindow(value: request)
     }
 
@@ -578,6 +579,10 @@ struct StreamsSection: View {
     @State private var selection: StreamTableRow.ID?
     @State private var filters = StreamFilters()
     @AppStorage(Prefs.streamPlayer) private var player: StreamFilters.Player = .any
+    /// Settings ▸ Playback ▸ Show technical details: file format and player in the table.
+    @AppStorage(Prefs.technicalDetails) private var technical = false
+    /// Column visibility (people can also show or hide columns from the header's context menu).
+    @State private var columns = TableColumnCustomization<StreamTableRow>()
 
     /// Add-ons that returned streams, in the user's add-on order.
     private var sources: [(id: String, name: String, count: Int)] {
@@ -642,6 +647,9 @@ struct StreamsSection: View {
                 }
             } else {
                 table(rows, best: best)
+                    .onChange(of: technical, initial: true) { _, on in
+                        columns[visibility: "format"] = on ? .visible : .hidden
+                    }
                     .frame(height: min(CGFloat(max(rows.count, 4)) * 46 + 30, 600))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.separator))
@@ -664,7 +672,7 @@ struct StreamsSection: View {
     struct Bests { let overall, video, audio, native: String? }
 
     private func table(_ rows: [StreamTableRow], best: Bests) -> some View {
-        Table(rows, selection: $selection, sortOrder: $sortOrder) {
+        Table(rows, selection: $selection, sortOrder: $sortOrder, columnCustomization: $columns) {
             TableColumn("Stream", value: \.score) { r in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
@@ -673,7 +681,8 @@ struct StreamsSection: View {
                                 .help("Best quality overall").accessibilityLabel("Best quality")
                         } else if r.id == best.native {
                             Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                                .help("Best stream Apple's player can open").accessibilityLabel("Best native")
+                                .help("Recommended: the best stream with AirPlay and Picture in Picture")
+                                .accessibilityLabel("Recommended")
                         }
                         Text(r.name).fontWeight(.medium).lineLimit(1)
                     }
@@ -682,12 +691,14 @@ struct StreamsSection: View {
                 .help(r.label)
             }
             .width(min: 180, ideal: 260)
+            .customizationID("stream")
 
             TableColumn("Video", value: \.videoScore) { r in
                 SpecCell(tags: r.quality.videoTags, isBest: r.id == best.video, bestLabel: "Best video",
                          bestColor: .purple, measured: r.measured?.videoCodec != nil ? r.measured?.measuredFrom : nil)
             }
             .width(min: 180, ideal: 260)
+            .customizationID("video")
 
             TableColumn("Audio", value: \.audioScore) { r in
                 SpecCell(tags: r.quality.audioTags, isBest: r.id == best.audio, bestLabel: "Best audio",
@@ -695,6 +706,7 @@ struct StreamsSection: View {
                          warning: r.audioOverstated)
             }
             .width(min: 150, ideal: 210)
+            .customizationID("audio")
 
             TableColumn("Bitrate", value: \.mbps) { r in
                 if let b = r.bitrate {
@@ -712,22 +724,28 @@ struct StreamsSection: View {
                 }
             }
             .width(min: 80, ideal: 95, max: 120)
+            .customizationID("bitrate")
 
             TableColumn("Size", value: \.sizeGB) { r in
                 Text(r.quality.sizeGB.map { $0.formatted(.number.precision(.fractionLength($0 < 10 ? 1 : 0))) + " GB" } ?? "—")
                     .monospacedDigit().foregroundStyle(.secondary)
             }
             .width(min: 55, ideal: 65, max: 85)
+            .customizationID("size")
 
             TableColumn("Format", value: \.nativeRank) { r in
                 FormatBadge(stream: r.stream)
             }
             .width(min: 65, ideal: 75, max: 95)
+            .customizationID("format")
+            .defaultVisibility(.hidden)   // shown by Settings ▸ Playback ▸ Show technical details
 
             TableColumn("Add-on", value: \.addon) { r in
                 Text(r.addon).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(r.addon)
             }
             .width(min: 96, ideal: 120, max: 180)
+            .customizationID("addon")
+
         }
         .contextMenu(forSelectionType: StreamTableRow.ID.self) { ids in
             if let r = rows.first(where: { ids.contains($0.id) }) {
@@ -776,7 +794,7 @@ struct FormatBadge: View {
     let stream: AddonStream
     var body: some View {
         switch stream.likelyNative {
-        case .some(true): Text("NATIVE").badgeStyle(.green).help("Plays in Apple's player")
+        case .some(true): Text(stream.container.uppercased()).badgeStyle(.green).help("Plays in Apple's player (AirPlay, Picture in Picture)")
         case .some(false): Text(stream.container.uppercased()).badgeStyle(.orange).help("Plays in mpv")
         case .none: Text("—").foregroundStyle(.secondary)
         }
@@ -813,7 +831,7 @@ struct QualityTags: View {
     var body: some View {
         FlowLayout(spacing: 4) {
             if isBest { Label("Best quality", systemImage: "star.fill").tagStyle(.yellow) }
-            if isBestNative { Label("Best native", systemImage: "checkmark.seal.fill").tagStyle(.green) }
+            if isBestNative { Label("Recommended", systemImage: "checkmark.seal.fill").tagStyle(.green) }
             if let r = quality.resolution.label { Text(r).tagStyle(quality.resolution >= .uhd ? .indigo : .blue) }
             ForEach(quality.hdr, id: \.self) { Text($0.rawValue).tagStyle(.purple) }
             if let s = quality.source { Text(s.rawValue).tagStyle(s == .cam ? .red : .gray) }

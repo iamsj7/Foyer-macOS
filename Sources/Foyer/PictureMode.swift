@@ -1,4 +1,5 @@
 import SwiftUI
+import AddonKit
 import AVKit
 
 // MARK: - Picture modes (both players)
@@ -93,6 +94,45 @@ extension PictureLayout {
         let t = PictureLayout.target(in: bounds, videoAspect: override ?? va, scaling: scaling, pixelSize: pixelSize)
         let size = CGSize(width: t.width / fx, height: t.height / fy)
         return CGRect(x: t.midX - size.width / 2, y: t.midY - size.height / 2, width: size.width, height: size.height)
+    }
+}
+
+// MARK: - Quality chips
+
+/// What's playing, as the TV app labels it: 4K · Dolby Vision · Atmos · 5.1. From the source's label,
+/// corrected by what the player reports (actual height; HDR in mpv).
+struct PlayerQualityChips: View {
+    let sourceText: String
+    var videoHeight: Int? = nil
+    var liveHDR: Bool? = nil
+
+    private var chips: [String] {
+        let q = StreamQuality(parsing: sourceText)
+        var out: [String] = []
+        if let h = videoHeight, h > 0 {
+            out.append(h >= 2000 ? "4K" : h >= 1400 ? "1440p" : h >= 1000 ? "1080p" : h >= 700 ? "720p" : "SD")
+        } else if let r = q.resolution.label { out.append(r) }
+        if q.hdr.contains(.dolbyVision) { out.append("Dolby Vision") }
+        else if let h = q.hdr.first { out.append(h.rawValue) }
+        else if liveHDR == true { out.append("HDR") }
+        if let a = q.audio.first { out.append(a.contains("Atmos") ? "Dolby Atmos" : a) }
+        if let ch = q.channels, ch != "2.0" { out.append(ch) }
+        return out
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(chips, id: \.self) { t in
+                Text(t)
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(0.65), lineWidth: 1))
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("Playing in \(chips.joined(separator: ", "))"))
     }
 }
 

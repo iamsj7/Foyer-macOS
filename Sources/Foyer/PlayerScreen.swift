@@ -79,6 +79,16 @@ final class PlayerModel: PlaybackControls {
     @ObservationIgnored private var stopped = false
 
     private func begin(url: URL, headers: [String: String], library: LibraryStore) {
+        // Watchdog: with fallbacks available, a source that hasn't started in 30 s is given up on.
+        if !request.alternates.isEmpty {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                // (Before it's ready AVPlayer reports "paused", so that isn't a reason to wait.)
+                guard let self, !self.stopped, self.failure == nil, self.phase != .playing else { return }
+                self.timedOut = true
+                self.failure = "This source didn't start in time."
+            }
+        }
         let item = AVPlayerItem(asset: PlaybackProbe.makeAsset(url: url, headers: headers))
         player.replaceCurrentItem(with: item)
         player.preventsDisplaySleepDuringVideoPlayback = true
@@ -114,6 +124,9 @@ final class PlayerModel: PlaybackControls {
                 if t.seconds.isFinite { self.position = t.seconds }
                 let d = item.duration.seconds
                 if d.isFinite, d > 0, d != self.duration { self.duration = d }
+                // HLS switches resolution with bandwidth; keep the quality chip honest.
+                let h = Int(item.presentationSize.height)
+                if h > 0, h != self.videoHeight { self.videoHeight = h }
             }
         }
         // Errors after playback began (network drop, bad segment) arrive here, not via status.
@@ -186,11 +199,9 @@ final class PlayerModel: PlaybackControls {
             publishNowPlaying()
             checkForVideo()
             loadMediaOptions()
+            if let h = player.currentItem?.presentationSize.height, h > 0 { videoHeight = Int(h) }
         case .failed:
-            let isMKV = request.url.lowercased().contains(".mkv")
-            failure = isMKV
-                ? "This is an MKV file, which Apple's native player can't open. Play it with mpv instead, or pick a stream marked NATIVE."
-                : (message ?? "The native player couldn't open this stream.")
+            failure = message ?? "This stream couldn't be opened."
         default:
             break
         }
@@ -243,6 +254,11 @@ final class PlayerModel: PlaybackControls {
     /// Set when Apple's player can decode the audio but not the video (e.g. HEVC tagged "hev1"
     /// in MP4, common for Dolby Vision streams): the screen hands the stream to mpv.
     var needsMPV = false
+    /// The source didn't start within the watchdog time (stalled, not unsupported): skip mpv and
+    /// move straight to the next source.
+    private(set) var timedOut = false
+    /// The decoded picture's height once known, for the quality chips.
+    private(set) var videoHeight: Int?
     /// Fit / Fill / Stretch (Apple's player can't reshape or show actual size).
     /// Opens at the original aspect (Fit) every time; a change applies to this window only.
     var scaling: VideoScaling = .fit
@@ -377,6 +393,7 @@ struct PlayerScreen: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: PlayerModel?
+    @State private var checkedAlternates: [SavedSource]?
     @State private var controlsVisible = true
     @State private var lastActivity = Date()
     @State private var lastPointer: CGPoint?
@@ -466,10 +483,28 @@ struct PlayerScreen: View {
         .onChange(of: model?.failure != nil) { _, failed in
             guard failed, let model else { return }
             let position = model.currentSeconds > 1 ? model.currentSeconds : request.startAt
-            var handoff = request.at(position)
-            handoff.note = "Apple's player couldn't open this stream, so Foyer opened it with mpv."
-            openWindow(value: MPVRequest(request: handoff))
+            if model.timedOut {
+                // Stalled: mpv would stall too, so go straight to the next live source.
+                if let url = URL(string: request.url) { Task { await SourceCheck.markDead(url) } }
+                var pool = request
+                pool.alternates = checkedAlternates ?? request.alternates
+                guard let next = pool.alternates.first else { return }
+                library.rememberSource(next, for: request)
+                openWindow(value: pool.switching(to: next, at: position,
+                                                 note: "That source stalled, so Foyer moved to the next best one."))
+            } else {
+                // Couldn't open it: the same source in a player that handles more formats.
+                var handoff = request.at(position)
+                handoff.alternates = checkedAlternates ?? request.alternates
+                handoff.note = "Switching to a compatible player…"
+                openWindow(value: MPVRequest(request: handoff))
+            }
             dismissWindow()
+        }
+        // While it plays, check the fallbacks so a switch would land on a live source.
+        .task(id: model?.phase == .playing) {
+            guard model?.phase == .playing, checkedAlternates == nil, !request.alternates.isEmpty else { return }
+            checkedAlternates = await PlayRequest.prewarm(request.alternates)
         }
         .focusedSceneValue(\.playback, model)
         .playerWindow()

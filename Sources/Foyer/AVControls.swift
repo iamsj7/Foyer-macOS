@@ -82,6 +82,7 @@ struct AVControlsBar: View {
                     optionMenu(model.audioOptions, selected: model.selectedAudio, title: "Audio",
                                systemImage: "speaker.wave.2", allowsOff: false) { model.selectAudio($0) }
                     subtitlesMenu
+                    PlayerQualityChips(sourceText: model.request.sourceText, videoHeight: model.videoHeight)
                     Spacer()
                     Button("Back 10 Seconds", systemImage: "gobackward.10") { model.skip(-10) }
                     Button(model.isPaused ? "Play" : "Pause", systemImage: model.isPaused ? "play.fill" : "pause.fill") {

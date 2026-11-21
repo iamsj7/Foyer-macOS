@@ -390,6 +390,7 @@ final class MPVPlayerModel: PlaybackControls {
     var tracks: [MPVTrack] = []
     var isHDR = false
     @ObservationIgnored private var videoSize = CGSize.zero
+    private(set) var videoHeight: Int?
     /// Every video opens at its original aspect (Fit); a change applies to this window only.
     var scaling: VideoScaling = .fit {
         didSet { host.scaling = scaling }
@@ -411,11 +412,19 @@ final class MPVPlayerModel: PlaybackControls {
             DispatchQueue.main.async { self?.handle(event, library: library) }
         }
         guard let core = MPVCore(layer: host.metalLayer, hdr: edr, onEvent: onEvent) else {
-            failure = "mpv couldn't start on this Mac."
+            failure = "The player couldn't start on this Mac."
             return
         }
         self.core = core
         core.load(request.url, start: request.startAt, headers: request.headers)
+        // Watchdog: with fallbacks available, a source that hasn't opened in 30 s is given up on.
+        if !request.alternates.isEmpty {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                guard let self, self.core != nil, self.failure == nil, !self.loaded else { return }
+                self.failure = "This source didn't start in time."
+            }
+        }
         setUpRemoteCommands()
     }
 
@@ -431,7 +440,7 @@ final class MPVPlayerModel: PlaybackControls {
         case .double("video-params/sig-peak", let v): isHDR = v > 1
         case .double("video-params/aspect", let v): host.videoAspect = v > 0 ? v : nil
         case .int("video-params/dw", let v): videoSize.width = CGFloat(v); host.videoPixels = videoSize.width > 0 && videoSize.height > 0 ? videoSize : nil
-        case .int("video-params/dh", let v): videoSize.height = CGFloat(v); host.videoPixels = videoSize.width > 0 && videoSize.height > 0 ? videoSize : nil
+        case .int("video-params/dh", let v): videoSize.height = CGFloat(v); videoHeight = Int(v); host.videoPixels = videoSize.width > 0 && videoSize.height > 0 ? videoSize : nil
         case .flag("pause", let v): paused = v; publishNowPlaying()
         case .flag("mute", let v): muted = v
         case .flag("paused-for-cache", let v): buffering = v
@@ -445,7 +454,7 @@ final class MPVPlayerModel: PlaybackControls {
             publishNowPlaying()
         case .endFile(let error):
             if let error, !loaded || position < 1 {
-                failure = "mpv couldn't open this stream (\(error))."
+                failure = "This stream couldn't be opened (\(error))."
             }
         default: break
         }
@@ -532,6 +541,7 @@ struct MPVPlayerScreen: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: MPVPlayerModel?
+    @State private var checkedAlternates: [SavedSource]?
     @State private var controlsVisible = true
     @State private var lastActivity = Date()
     @State private var lastPointer: CGPoint?
@@ -616,12 +626,21 @@ struct MPVPlayerScreen: View {
         // The stream failed to open: move on to the next source (best quality first) at the same
         // position, and make it the Resume source. With no fallbacks left, the error stays.
         .onChange(of: model?.failure != nil) { _, failed in
-            guard failed, let model, let next = request.alternates.first else { return }
+            guard failed, let model else { return }
+            if let url = URL(string: request.url) { Task { await SourceCheck.markDead(url) } }
+            var pool = request
+            pool.alternates = checkedAlternates ?? request.alternates
+            guard let next = pool.alternates.first else { return }
             library.rememberSource(next, for: request)
             let position = model.position > 1 ? model.position : request.startAt
-            openWindow(value: request.switching(to: next, at: position,
-                                                note: "That source didn't load, so Foyer moved to the next best one."))
+            openWindow(value: pool.switching(to: next, at: position,
+                                             note: "That source didn't load, so Foyer moved to the next best one."))
             dismissWindow()
+        }
+        // While it plays, check the fallbacks so a switch would land on a live source.
+        .task(id: model?.loaded == true) {
+            guard model?.loaded == true, checkedAlternates == nil, !request.alternates.isEmpty else { return }
+            checkedAlternates = await PlayRequest.prewarm(request.alternates)
         }
     }
 
@@ -661,11 +680,8 @@ struct MPVControls: View {
                 HStack(spacing: 16) {
                     trackMenu(type: "audio", systemImage: "speaker.wave.2", title: "Audio")
                     trackMenu(type: "sub", systemImage: "captions.bubble", title: "Subtitles")
-                    if model.isHDR {
-                        Text("HDR").font(.caption.weight(.bold)).padding(.horizontal, 6).padding(.vertical, 2)
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(0.7)))
-                            .accessibilityLabel("HDR video")
-                    }
+                    PlayerQualityChips(sourceText: model.request.sourceText,
+                                       videoHeight: model.videoHeight, liveHDR: model.isHDR)
                     Spacer()
                     Button("Back 10 Seconds", systemImage: "gobackward.10") { model.skip(-10) }
                     Button(model.paused ? "Play" : "Pause", systemImage: model.paused ? "play.fill" : "pause.fill") {
@@ -745,7 +761,7 @@ struct MPVLoadingBadge: View {
                 Text("Buffering \(percent)%").font(.callout.weight(.medium)).monospacedDigit()
             } else {
                 ProgressView().controlSize(.large)
-                Text("Opening with mpv · \(host)…").font(.callout).foregroundStyle(.secondary)
+                Text("Connecting to \(host)…").font(.callout).foregroundStyle(.secondary)
                 if let note = request.note {
                     Label(note, systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption).foregroundStyle(.secondary)

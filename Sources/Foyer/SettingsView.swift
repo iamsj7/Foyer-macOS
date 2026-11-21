@@ -6,7 +6,8 @@ import AddonKit
 enum Prefs {
     static let resume = "playback.resume"                       // Bool, default true
     static let nativeOnly = "streamsNativeOnly"                 // Bool, legacy: replaced by streamPlayer
-    static let streamPlayer = "streams.player"                  // StreamFilters.Player: any / native / mpv
+    static let streamPlayer = "streams.player"                  // StreamFilters.Player: any / native
+    static let technicalDetails = "streams.technicalDetails"    // Bool, default false: format column
 
     /// "Show only native streams" became the Player filter; carry the old choice over once.
     static func migrateStreamFilter() {
@@ -152,7 +153,7 @@ struct SettingsWindow: View {
 
 struct PlaybackSettings: View {
     @AppStorage(Prefs.resume) private var resume = true
-    @AppStorage(Prefs.streamPlayer) private var player: StreamFilters.Player = .any
+    @AppStorage(Prefs.technicalDetails) private var technical = false
 
     var body: some View {
         Form {
@@ -162,15 +163,9 @@ struct PlaybackSettings: View {
                 Text("Resume continues on the same source at your last position.")
             }
             Section {
-                Picker("Stream list shows", selection: $player) {
-                    ForEach(StreamFilters.Player.allCases) { Text($0 == .any ? "All Streams" : "\($0.title) Streams").tag($0) }
-                }
+                Toggle("Show technical details", isOn: $technical)
             } footer: {
-                Text("The same choice as the Player filter above a title's streams.")
-            }
-            Section("Players") {
-                LabeledContent("Apple's player", value: "MP4, MOV, HLS · HDR, Dolby Vision, Atmos, AirPlay")
-                LabeledContent("mpv", value: "MKV, AVI, WebM and more")
+                Text("Adds each stream's file format to the stream list. \(AppInfo.name) always picks the right player automatically.")
             }
         }
         .formStyle(.grouped)

@@ -52,7 +52,7 @@ struct FoyerApp: App {
         .defaultSize(width: 1280, height: 720)
 
         // AVPlayer hands streams it can't play to this window automatically, at the same position.
-        WindowGroup("Player (mpv)", for: MPVRequest.self) { $req in
+        WindowGroup("Player", for: MPVRequest.self) { $req in
             if let req {
                 MPVPlayerScreen(request: req.request)
                     .environment(library)

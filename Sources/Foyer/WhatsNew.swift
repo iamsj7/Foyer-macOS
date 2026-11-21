@@ -15,11 +15,11 @@ enum WhatsNew {
     static let releases: [(version: String, items: [WhatsNewItem])] = [
         ("0.2.0", [
             .init(symbol: "sparkles.tv.fill", tint: .orange, title: "Best quality, automatically",
-                  detail: "Play checks sources from the highest quality down and starts the first that works, in whichever player it needs."),
+                  detail: "Play checks sources from the highest quality down and starts the first that works."),
             .init(symbol: "arrow.triangle.2.circlepath", tint: .green, title: "Never stuck on a dead link",
                   detail: "If a stream fails, Foyer moves to the next best source at the same spot. Resume checks your last source first."),
             .init(symbol: "line.3.horizontal.decrease.circle.fill", tint: .blue, title: "Stream filters",
-                  detail: "Narrow the stream list by quality, HDR, audio, player and add-on."),
+                  detail: "Narrow the stream list by quality, HDR, audio, AirPlay & Picture in Picture, and add-on."),
             .init(symbol: "gearshape.fill", tint: .gray, title: "Organised Settings",
                   detail: "Settings are grouped into Add-ons, Playback, Subtitles, Library, Storage and About."),
         ]),

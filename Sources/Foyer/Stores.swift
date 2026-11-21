@@ -128,6 +128,8 @@ struct SavedSource: Codable, Hashable {
     let name: String?
     let label: String
     let videoId: String       // movie: title id; episode: "tt…:season:episode"
+
+    var qualityText: String { [name ?? "", label].joined(separator: " ") }
 }
 
 struct LibraryItem: Codable, Identifiable, Hashable {
@@ -238,6 +240,20 @@ struct PlayRequest: Codable, Hashable {
     var alternates: [SavedSource] = []
     /// Shown while loading (e.g. "Your last source didn't respond; playing the best one that did.").
     var note: String? = nil
+    /// The source's name and label, parsed for the player's quality chips (4K, Dolby Vision, Atmos…).
+    var sourceText: String = ""
+
+    /// Checks the fallbacks in order (up to a few) and returns them without the dead ones that come
+    /// before the first live one, so a switch lands on a source that answers. Run while playing.
+    static func prewarm(_ alternates: [SavedSource]) async -> [SavedSource] {
+        var pool = alternates
+        for s in alternates.prefix(4) {
+            guard !Task.isCancelled, let url = URL(string: s.url) else { break }
+            if await SourceCheck.isAvailable(.init(id: s.url, url: url, headers: s.headers)) { break }
+            pool.removeAll { $0.url == s.url }   // isAvailable already remembered it as dead
+        }
+        return pool
+    }
 
     /// This request at another position (same source and fallbacks).
     func at(_ position: Double) -> PlayRequest {
@@ -245,6 +261,7 @@ struct PlayRequest: Codable, Hashable {
                             titleName: titleName, subtitle: subtitle, poster: poster, startAt: position)
         r.alternates = alternates
         r.note = note
+        r.sourceText = sourceText
         return r
     }
 
@@ -253,6 +270,7 @@ struct PlayRequest: Codable, Hashable {
         var r = PlayRequest(url: next.url, headers: next.headers, titleId: titleId, videoId: videoId, type: type,
                             titleName: titleName, subtitle: subtitle, poster: poster, startAt: position)
         r.alternates = alternates.filter { $0.url != next.url }
+        r.sourceText = next.qualityText
         r.note = note
         return r
     }

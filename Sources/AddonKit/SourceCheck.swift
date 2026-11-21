@@ -47,6 +47,16 @@ public enum SourceCheck {
     /// HLS: master playlist, first variant playlist and its first segment must all answer.
     /// Anything else: the first KB must come back as media, not an error page.
     public static func isAvailable(_ c: Candidate, timeout: TimeInterval = 20) async -> Bool {
+        if await DeadHosts.shared.isDead(c.url) { return false }
+        let ok = await check(c, timeout: timeout)
+        if !ok { await DeadHosts.shared.markDead(c.url) }
+        return ok
+    }
+
+    /// Records a link that failed in a player, so checks skip it for a while.
+    public static func markDead(_ url: URL) async { await DeadHosts.shared.markDead(url) }
+
+    private static func check(_ c: Candidate, timeout: TimeInterval) async -> Bool {
         if c.url.path.lowercased().hasSuffix(".m3u8") {
             guard let (master, base) = await text(c.url, c.headers, timeout), master.hasPrefix("#EXTM3U") else { return false }
             guard let variant = firstURI(master, base: base) else { return false }
@@ -69,20 +79,58 @@ public enum SourceCheck {
         return r
     }
 
+    /// One retry for errors that are often momentary (5xx, dropped connection). Timeouts and 4xx
+    /// aren't retried: a slow or missing source shouldn't cost twice.
+    private static func fetch(_ req: URLRequest) async -> (Data, HTTPURLResponse)? {
+        for attempt in 0..<2 {
+            do {
+                let (data, resp) = try await session.data(for: req)
+                guard let http = resp as? HTTPURLResponse else { return nil }
+                if (500..<600).contains(http.statusCode), attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 400_000_000); continue
+                }
+                return (data, http)
+            } catch let e as URLError where attempt == 0 && e.code != .timedOut && e.code != .cancelled {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            } catch {
+                return nil
+            }
+        }
+        return nil
+    }
+
     private static func text(_ url: URL, _ headers: [String: String], _ timeout: TimeInterval) async -> (String, URL)? {
-        guard let (data, resp) = try? await session.data(for: request(url, headers, timeout)),
-              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+        guard let (data, http) = await fetch(request(url, headers, timeout)),
+              (200..<300).contains(http.statusCode) else { return nil }
         return (String(decoding: data.prefix(2_000_000), as: UTF8.self), http.url ?? url)
     }
 
     private static func bytes(_ url: URL, _ headers: [String: String], _ timeout: TimeInterval) async -> Bool {
         var r = request(url, headers, timeout)
         r.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
-        guard let (data, resp) = try? await session.data(for: r),
-              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else { return false }
-        // Error pages often come back as 200 text/html.
+        guard let (data, http) = await fetch(r), (200..<300).contains(http.statusCode), !data.isEmpty else { return false }
+        // Error pages often come back as 200 text/html, or with a video type but an HTML/JSON body.
         let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-        return !type.contains("text/html") && !type.contains("application/json")
+        if type.contains("text/html") || type.contains("application/json") { return false }
+        return looksLikeMedia(data)
+    }
+
+    /// The first bytes of a media file: reject obvious documents (HTML, XML, JSON, plain text error
+    /// messages) and accept known container signatures. Unknown binary data passes (codecs vary).
+    static func looksLikeMedia(_ d: Data) -> Bool {
+        let b = [UInt8](d.prefix(16))
+        guard !b.isEmpty else { return false }
+        if b.count >= 8, Array(b[4..<8]) == Array("ftyp".utf8) || Array(b[4..<8]) == Array("styp".utf8)
+            || Array(b[4..<8]) == Array("moof".utf8) || Array(b[4..<8]) == Array("moov".utf8) { return true }  // MP4 / fMP4
+        if b.starts(with: [0x1A, 0x45, 0xDF, 0xA3]) { return true }   // Matroska / WebM
+        if b[0] == 0x47 { return true }                               // MPEG-TS sync byte
+        if b.starts(with: Array("ID3".utf8)) { return true }           // AAC/MP3 segments
+        if b.starts(with: [0x52, 0x49, 0x46, 0x46]) { return true }   // AVI (RIFF)
+        // Text-looking starts: an error page or message, not media.
+        let first = b.first { $0 != 0x20 && $0 != 0x0A && $0 != 0x0D && $0 != 0x09 && $0 != 0xEF && $0 != 0xBB && $0 != 0xBF } ?? 0
+        if first == UInt8(ascii: "<") || first == UInt8(ascii: "{") || first == UInt8(ascii: "[") { return false }
+        let printable = b.filter { (0x20...0x7E).contains($0) || $0 == 0x0A || $0 == 0x0D }.count
+        return printable < b.count   // all-printable = text, e.g. "Access denied"
     }
 
     private static func firstSegment(_ url: URL, _ headers: [String: String], _ timeout: TimeInterval) async -> URL? {
@@ -127,5 +175,25 @@ public enum SourceCheck {
             }
             completionHandler(next)
         }
+    }
+}
+
+/// Links that just failed (a check or a player), skipped for a few minutes so Play doesn't wait on
+/// them again. Keyed by the full link, not the host: many add-ons serve every stream through one
+/// resolver host, so one dead link says nothing about the others. In memory only, never logged.
+actor DeadHosts {
+    static let shared = DeadHosts()
+    private var failed: [String: Date] = [:]
+    private let ttl: TimeInterval = 5 * 60
+
+    func isDead(_ url: URL) -> Bool {
+        let key = url.absoluteString
+        guard let when = failed[key] else { return false }
+        if Date().timeIntervalSince(when) > ttl { failed[key] = nil; return false }
+        return true
+    }
+    func markDead(_ url: URL) {
+        failed[url.absoluteString] = Date()
+        if failed.count > 500 { failed = failed.filter { Date().timeIntervalSince($0.value) < ttl } }
     }
 }
