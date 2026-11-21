@@ -77,6 +77,11 @@ final class MPVCore: @unchecked Sendable {
         option("subs-match-os-language", "yes")
         option("subs-fallback", "yes")
         option("audio-channels", "auto-safe")   // pass surround to capable outputs, downmix otherwise
+        // mpv 0.41's coreaudio output leaves its CoreAudio device listener registered when its init
+        // fails partway, so a later device change (headphones, AirPlay, display sleep) calls into the
+        // freed output and crashes the app. The AVFoundation output registers no such listener and
+        // follows the system output on its own; coreaudio stays as a fallback.
+        option("ao", "avfoundation,coreaudio")
         option("input-default-bindings", "no")
         option("input-vo-keyboard", "no")      // keys go through SwiftUI, not mpv
         if hdr { option("target-colorspace-hint", "yes") }   // must be set before init (MPVKit note)
