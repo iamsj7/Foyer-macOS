@@ -18,7 +18,7 @@ final class SubtitleController {
         var id: String { code }
     }
 
-    private(set) var groups: [SubtitleGroup] = []
+    private(set) var groups: [SubtitleGroup] = [] { didSet { languages = Self.makeLanguages(from: groups) } }
     private(set) var isSearching = false
     private(set) var hasSubtitleAddons = false
     private(set) var selected: SubtitleTrack?
@@ -30,26 +30,31 @@ final class SubtitleController {
     /// Short status shown briefly at the top of the player ("Subtitle delay +0.5 s").
     private(set) var notice: String?
 
-    private weak var player: AVPlayer?
-    private var request: PlayRequest?
-    private var timeline: SubtitleTimeline?
-    private var timeObserver: Any?
-    private var searchTask: Task<Void, Never>?
-    private var loadTask: Task<Void, Never>?
-    private var noticeTask: Task<Void, Never>?
-    private var addonOrder: [String] = []
-    private var userChose = false
-    private var generation = 0
-    private let client = AddonClient()
+    @ObservationIgnored private weak var player: AVPlayer?
+    @ObservationIgnored private var request: PlayRequest?
+    @ObservationIgnored private var timeline: SubtitleTimeline?
+    @ObservationIgnored private var timeObserver: Any?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var noticeTask: Task<Void, Never>?
+    @ObservationIgnored private var addonOrder: [String] = []
+    @ObservationIgnored private var userChose = false
+    @ObservationIgnored private var generation = 0
+    /// One URLSession for every player window; a per-controller client would leak a session each time.
+    private static let client = AddonClient()
 
     var tracks: [SubtitleTrack] { groups.flatMap(\.subtitles) }
     var failedAddons: [SubtitleGroup] { groups.filter { $0.error != nil } }
 
     /// Languages, the preferred one first, then the system language, then alphabetical.
-    var languages: [LanguageGroup] {
-        let preferred = UserDefaults.standard.string(forKey: Self.preferredLanguageKey) ?? ""
+    /// Stored: the menu body reads it on every evaluation. The preferred language is read when
+    /// `groups` changes.
+    private(set) var languages: [LanguageGroup] = []
+
+    private static func makeLanguages(from groups: [SubtitleGroup]) -> [LanguageGroup] {
+        let preferred = UserDefaults.standard.string(forKey: preferredLanguageKey) ?? ""
         let system = Locale.current.language.languageCode?.identifier ?? "en"
-        let byCode = Dictionary(grouping: tracks, by: \.languageCode)
+        let byCode = Dictionary(grouping: groups.flatMap(\.subtitles), by: \.languageCode)
         return byCode.map { LanguageGroup(code: $0.key, name: SubtitleLanguage.displayName($0.key), tracks: $0.value) }
             .sorted { a, b in
                 func rank(_ g: LanguageGroup) -> Int {
@@ -80,21 +85,25 @@ final class SubtitleController {
     func search() {
         guard let request else { return }
         searchTask?.cancel()
-        let addons = Disk.load("addons", as: [InstalledAddon].self) ?? []
-        let capable = addons.filter { $0.supports("subtitles", type: request.type, id: request.videoId) }
-        addonOrder = addons.map(\.id)
-        hasSubtitleAddons = !capable.isEmpty
         groups = []
         generation += 1
-        guard !capable.isEmpty else { isSearching = false; return }
         isSearching = true
-        let client = client, gen = generation
+        let client = Self.client, gen = generation
         let onGroup: @Sendable (SubtitleGroup) async -> Void = { [weak self] group in
             await self?.receive(group, generation: gen)
         }
         searchTask = Task { [weak self] in
+            // The file read stays off the main actor.
+            let addons = await Task.detached(priority: .userInitiated) {
+                Disk.load("addons", as: [InstalledAddon].self) ?? []
+            }.value
+            guard let self, !Task.isCancelled, self.generation == gen else { return }
+            let capable = addons.filter { $0.supports("subtitles", type: request.type, id: request.videoId) }
+            self.addonOrder = addons.map(\.id)
+            self.hasSubtitleAddons = !capable.isEmpty
+            guard !capable.isEmpty else { self.isSearching = false; return }
             await client.subtitles(from: capable, type: request.type, id: request.videoId, onGroup: onGroup)
-            guard let self, self.generation == gen else { return }
+            guard !Task.isCancelled, self.generation == gen else { return }
             self.isSearching = false
         }
     }
@@ -137,7 +146,7 @@ final class SubtitleController {
         selected = track
         isLoadingTrack = true
         timeline = nil; text = nil
-        let client = client
+        let client = Self.client
         loadTask = Task { [weak self] in
             do {
                 let timeline = try await client.cues(for: track)   // download + parse off the main actor

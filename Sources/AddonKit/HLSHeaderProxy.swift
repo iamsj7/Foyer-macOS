@@ -134,7 +134,9 @@ public final class HLSHeaderProxy: @unchecked Sendable {
         if let range = clientHeaders["range"] { req.setValue(range, forHTTPHeaderField: "Range") }
 
         let task = upstream.dataTask(with: req)
-        relay.transfers[task.taskIdentifier] = Transfer(connection: c, session: session, target: target, headOnly: isHead)
+        let transfer = Transfer(connection: c, session: session, target: target, headOnly: isHead)
+        transfer.task = task
+        relay.transfers[task.taskIdentifier] = transfer
         // AVPlayer drops requests on seeks and quality switches: stop the download with it.
         c.stateUpdateHandler = { state in
             switch state {
@@ -170,6 +172,10 @@ public final class HLSHeaderProxy: @unchecked Sendable {
         let headOnly: Bool
         var playlist: Data?          // set when the response is a playlist (buffered, then rewritten)
         var failed = false
+        /// Bytes handed to the connection that it hasn't finished sending (proxy queue only).
+        var inFlight = 0
+        var suspended = false
+        weak var task: URLSessionDataTask?
         init(connection: NWConnection, session: String, target: URL, headOnly: Bool) {
             self.connection = connection; self.session = session; self.target = target; self.headOnly = headOnly
         }
@@ -206,8 +212,27 @@ public final class HLSHeaderProxy: @unchecked Sendable {
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
             guard let t = transfers[dataTask.taskIdentifier] else { return }
             if t.playlist != nil { t.playlist!.append(data) }
-            else { t.connection.send(content: data, completion: .contentProcessed { _ in }) }
+            else {
+                // Backpressure: when AVPlayer stops reading, pause the download instead of queueing
+                // bytes in memory. Send completions arrive on the queue the connection started on.
+                t.inFlight += data.count
+                t.connection.send(content: data, completion: .contentProcessed { [weak t] _ in
+                    guard let t else { return }
+                    t.inFlight = max(0, t.inFlight - data.count)
+                    if t.suspended, t.inFlight <= Self.lowWater {
+                        t.suspended = false
+                        t.task?.resume()
+                    }
+                })
+                if !t.suspended, t.inFlight >= Self.highWater {
+                    t.suspended = true
+                    dataTask.suspend()
+                }
+            }
         }
+
+        private static let highWater = 4 * 1024 * 1024
+        private static let lowWater = 1024 * 1024
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
             guard let t = transfers.removeValue(forKey: task.taskIdentifier) else { return }

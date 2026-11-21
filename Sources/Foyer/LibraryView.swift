@@ -28,11 +28,12 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        ScrollView {
+        let continueWatching = library.continueWatching
+        return ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                if scope == .recent && !library.continueWatching.isEmpty {
-                    PosterRow(title: "Continue Watching", items: library.continueWatching.map(\.preview),
-                              progress: Dictionary(uniqueKeysWithValues: library.continueWatching.map { ($0.id, $0.progress) }))
+                if scope == .recent && !continueWatching.isEmpty {
+                    PosterRow(title: "Continue Watching", items: continueWatching.map(\.preview),
+                              progress: Dictionary(uniqueKeysWithValues: continueWatching.map { ($0.id, $0.progress) }))
                 }
                 if !items.isEmpty {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
@@ -53,7 +54,7 @@ struct LibraryView: View {
             .padding(.vertical, 24)
         }
         .overlay {
-            if items.isEmpty && (scope != .recent || library.continueWatching.isEmpty) {
+            if items.isEmpty && (scope != .recent || continueWatching.isEmpty) {
                 ContentUnavailableView("No \(scope == .recent ? "Titles" : scope.title) Yet",
                                        systemImage: "rectangle.stack.badge.plus",
                                        description: Text("Titles you add with + show up here."))

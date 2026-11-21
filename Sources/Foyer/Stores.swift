@@ -37,6 +37,8 @@ enum Disk {
     static func saveInBackground<T: Encodable & Sendable>(_ value: T, _ name: String) {
         writer.async { save(value, name) }
     }
+    /// Blocks until queued writes finish; called at termination so ⌘Q doesn't drop them.
+    static func flush() { writer.sync {} }
     static func load<T: Decodable>(_ name: String, as type: T.Type) -> T? {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent(name + ".json")) else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
@@ -150,36 +152,55 @@ struct LibraryItem: Codable, Identifiable, Hashable {
     var preview: MetaPreview { MetaPreview(id: id, type: type, name: name, poster: poster) }
 }
 
+/// One title's library record, observed on its own so a progress tick for one title doesn't
+/// invalidate views showing another.
+@MainActor @Observable
+final class LibraryEntry {
+    let id: String
+    fileprivate(set) var item: LibraryItem?
+    fileprivate init(id: String, item: LibraryItem?) { self.id = id; self.item = item }
+}
+
 @MainActor @Observable
 final class LibraryStore {
-    private(set) var items: [String: LibraryItem] = [:]
+    @ObservationIgnored private var storage: [String: LibraryItem] = [:]
+    @ObservationIgnored private var entries: [String: LibraryEntry] = [:]
+    private(set) var continueWatching: [LibraryItem] = []
+    private(set) var saved: [LibraryItem] = []
+    private(set) var hasHistory = false
 
-    init() { items = Disk.load("library", as: [String: LibraryItem].self) ?? [:] }
-
-    var saved: [LibraryItem] { items.values.filter(\.saved).sorted { $0.updatedAt > $1.updatedAt } }
-    var continueWatching: [LibraryItem] {
-        items.values.filter(\.isInProgress).sorted { $0.updatedAt > $1.updatedAt }
+    init() {
+        storage = Disk.load("library", as: [String: LibraryItem].self) ?? [:]
+        refreshDerived()
     }
 
-    func isSaved(_ id: String) -> Bool { items[id]?.saved ?? false }
+    /// The persistent, individually observed record for a title. Creating it doesn't invalidate readers.
+    func entry(for id: String) -> LibraryEntry {
+        if let e = entries[id] { return e }
+        let e = LibraryEntry(id: id, item: storage[id])
+        entries[id] = e
+        return e
+    }
+
+    func isSaved(_ id: String) -> Bool { entry(for: id).item?.saved ?? false }
 
     func toggleSaved(_ m: MetaPreview) {
-        var item = items[m.id] ?? LibraryItem(id: m.id, type: m.type, name: m.name, poster: m.poster, saved: false)
+        var item = storage[m.id] ?? LibraryItem(id: m.id, type: m.type, name: m.name, poster: m.poster, saved: false)
         item.saved.toggle()
         item.updatedAt = Date()
-        items[m.id] = item
-        persist()
+        set(item)
+        commit()
     }
 
     /// Called when a stream starts, before any progress arrives. A different episode starts fresh.
     func rememberSource(_ source: SavedSource, for m: MetaPreview) {
-        var item = items[m.id] ?? LibraryItem(id: m.id, type: m.type, name: m.name, poster: m.poster, saved: false)
+        var item = storage[m.id] ?? LibraryItem(id: m.id, type: m.type, name: m.name, poster: m.poster, saved: false)
         if item.lastVideoId != source.videoId { item.position = 0; item.duration = 0 }
         item.lastVideoId = source.videoId
         item.lastSource = source
         item.updatedAt = Date()
-        items[m.id] = item
-        persist()
+        set(item)
+        commit()
     }
 
     /// The player moved to a fallback source: Resume should use the one that actually plays.
@@ -188,41 +209,64 @@ final class LibraryStore {
     }
 
     func resumePosition(titleId: String, videoId: String) -> Double {
-        guard let i = items[titleId], i.lastVideoId == videoId, i.isInProgress else { return 0 }
+        guard let i = storage[titleId], i.lastVideoId == videoId, i.isInProgress else { return 0 }
         return i.position
     }
 
     func updateProgress(_ req: PlayRequest, position: Double, duration: Double) {
         guard duration > 0, position.isFinite else { return }
-        var item = items[req.titleId] ?? LibraryItem(id: req.titleId, type: req.type, name: req.titleName,
-                                                     poster: req.poster, saved: false)
+        var item = storage[req.titleId] ?? LibraryItem(id: req.titleId, type: req.type, name: req.titleName,
+                                                       poster: req.poster, saved: false)
         item.position = position
         item.duration = duration
         item.lastVideoId = req.videoId
         item.updatedAt = Date()
-        items[req.titleId] = item
-        persist()
+        set(item)
+        commit()
     }
 
     /// Settings ▸ Clear Watch History: keeps saved titles, forgets positions.
     func clearHistory() {
-        for (id, var item) in items {
+        for (id, var item) in storage {
             item.position = 0; item.duration = 0; item.lastVideoId = nil
-            if item.saved { items[id] = item } else { items[id] = nil }
+            if item.saved { set(item) } else { remove(id) }
         }
-        persist()
+        commit()
     }
 
     /// Settings ▸ Remove All Saved Titles: keeps watch progress for unsaved titles.
     func removeAllSaved() {
-        for (id, var item) in items where item.saved {
+        for (id, var item) in storage where item.saved {
             item.saved = false
-            items[id] = item.position > 0 ? item : nil
+            if item.position > 0 { set(item) } else { remove(id) }
         }
-        persist()
+        commit()
     }
 
-    private func persist() { Disk.saveInBackground(items, "library") }
+    private func set(_ item: LibraryItem) {
+        storage[item.id] = item
+        if let e = entries[item.id], e.item != item { e.item = item }
+    }
+
+    private func remove(_ id: String) {
+        storage[id] = nil
+        if let e = entries[id], e.item != nil { e.item = nil }
+    }
+
+    private func commit() {
+        refreshDerived()
+        Disk.saveInBackground(storage, "library")
+    }
+
+    private func refreshDerived() {
+        let all = storage.values
+        let cw = all.filter(\.isInProgress).sorted { $0.updatedAt > $1.updatedAt }
+        let sv = all.filter(\.saved).sorted { $0.updatedAt > $1.updatedAt }
+        let history = all.contains { $0.position > 0 }
+        if cw != continueWatching { continueWatching = cw }
+        if sv != saved { saved = sv }
+        if history != hasHistory { hasHistory = history }
+    }
 }
 
 /// Everything a player window needs. Codable so it can open its own window.

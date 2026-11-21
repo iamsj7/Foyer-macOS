@@ -17,7 +17,8 @@ struct DetailView: View {
     @State private var selectedVideo: Video?
     @State private var groups: [StreamGroup] = []
     @State private var watchLinks: [WatchLink] = []
-    @State private var heroWidth: CGFloat = 0
+    /// Wide enough for the hero's credits block; a Bool so resizing only invalidates at the threshold.
+    @State private var wideHero = false
     @State private var checkingSources: (done: Int, total: Int)?
     @State private var autoPlayTask: Task<Void, Never>?
     @State private var noSourceResponded = false
@@ -46,30 +47,50 @@ struct DetailView: View {
     /// Streams are being fetched for something (not just "nothing picked yet").
     private var findingStreams: Bool { loadingStreams && streamId != nil }
 
-    /// A stream's label quality, corrected by measured specs when available.
-    private func effective(_ s: AddonStream) -> StreamQuality {
-        measured[s.id].map { s.quality.merged(with: $0) } ?? s.quality
+    /// Everything ranked from `groups` and `measured`, computed when either changes instead of on
+    /// every body evaluation.
+    struct Ranking {
+        /// Every playable stream, highest quality first, whichever player it needs. At equal quality,
+        /// Apple's player wins (HDR, AirPlay, PiP). Play, Resume fallbacks and in-player retries all
+        /// use this order.
+        var candidates: [AddonStream] = []
+        /// Best-quality stream Apple's player is expected to open directly.
+        var bestPlayableId: String?
+        var bestOverall: AddonStream?
+        var bestOverallQuality: StreamQuality?
+        var rows: [StreamTableRow] = []
+        /// Changes with every recompute, so views can key on it without comparing `rows`.
+        var version = 0
     }
-    /// Best-quality stream Apple's player is expected to open directly.
-    private var bestPlayable: AddonStream? {
-        groups.flatMap(\.streams)
-            .filter { $0.url != nil && $0.likelyNative != false }
-            .max { a, b in
-                let na = a.likelyNative == true, nb = b.likelyNative == true
-                return na != nb ? !na : effective(a) < effective(b)
+    @State private var ranking = Ranking()
+
+    private var playCandidates: [AddonStream] { ranking.candidates }
+
+    private func recomputeRanking() {
+        let measured = measured
+        let runtime = runtimeMinutes
+        var rows: [StreamTableRow] = []
+        for g in groups {
+            for s in g.streams {
+                let m = measured[s.id]
+                let q = m.map { s.quality.merged(with: $0) } ?? s.quality
+                rows.append(StreamTableRow(stream: s, addon: g.addon.manifest.name, addonId: g.addon.id, quality: q,
+                                           measured: m, bitrate: q.estimatedMbps(runtimeMinutes: runtime)))
             }
-    }
-    /// Auto-play order: streams Apple's player opens first (best quality first), then the ones mpv
-    /// plays, best first. Play checks them in this order and starts the first that responds.
-    /// Every playable stream, highest quality first, whichever player it needs. At equal quality,
-    /// Apple's player wins (HDR, AirPlay, PiP). Play, Resume fallbacks and in-player retries all use
-    /// this order.
-    private var playCandidates: [AddonStream] {
-        groups.flatMap(\.streams).filter { $0.url != nil }.sorted { a, b in
-            let qa = effective(a), qb = effective(b)
-            if qa.score != qb.score { return qa.score > qb.score }
-            return (a.likelyNative == true ? 0 : 1) < (b.likelyNative == true ? 0 : 1)
         }
+        // Qualities are merged once per stream, not inside the comparators.
+        let playable = rows.filter { $0.stream.url != nil }
+        let candidates = playable.sorted { a, b in
+            if a.quality.score != b.quality.score { return a.quality.score > b.quality.score }
+            return (a.stream.likelyNative == true ? 0 : 1) < (b.stream.likelyNative == true ? 0 : 1)
+        }.map(\.stream)
+        let bestPlayable = playable.filter { $0.stream.likelyNative != false }.max { a, b in
+            let na = a.stream.likelyNative == true, nb = b.stream.likelyNative == true
+            return na != nb ? !na : a.quality < b.quality
+        }
+        let overall = rows.max { $0.quality < $1.quality }
+        ranking = Ranking(candidates: candidates, bestPlayableId: bestPlayable?.id, bestOverall: overall?.stream,
+                          bestOverallQuality: overall?.quality, rows: rows, version: ranking.version &+ 1)
     }
 
     private func savedSource(_ s: AddonStream) -> SavedSource? {
@@ -102,6 +123,7 @@ struct DetailView: View {
         }
         probeToken = nil   // stop background measuring; it competes with the check
         checkingSources = (0, candidates.count)
+        autoPlayTask?.cancel()
         autoPlayTask = Task { @MainActor in
             // The preferred source alone first, so a working "last source" is never skipped for a
             // faster-answering one.
@@ -127,12 +149,12 @@ struct DetailView: View {
                 noSourceResponded = true
                 return
             }
+            guard !Task.isCancelled else { return }   // the page was left while the last check answered
             openPlayer(order[i], episode: selectedVideo, startAt: startAt,
                        alternates: Array(order[(i + 1)...].prefix(12)), note: note)
         }
     }
 
-    private var bestOverall: AddonStream? { groups.flatMap(\.streams).max { effective($0) < effective($1) } }
     private var runtimeMinutes: Double? {
         (meta?.runtime).flatMap { r in Double(r.prefix { $0.isNumber }) }
     }
@@ -144,7 +166,7 @@ struct DetailView: View {
                     hero(proxy)
                     VStack(alignment: .leading, spacing: 40) {
                         if isSeries {
-                            let last = library.items[preview.id]
+                            let last = library.entry(for: preview.id).item
                             EpisodesSection(episodesBySeason: info?.episodesBySeason ?? [:],
                                             seasons: info?.seasons ?? [],
                                             season: $season,
@@ -197,6 +219,9 @@ struct DetailView: View {
             }
         }
         .task { await loadMeta() }
+        // The unstructured check task outlives the view otherwise and would open a player for a page
+        // the user left.
+        .onDisappear { autoPlayTask?.cancel(); autoPlayTask = nil; checkingSources = nil }
         .task(id: streamId) { await loadStreams() }
         // Separate task so opening the player cancels the probes (they'd compete with playback).
         .task(id: probeToken) { if probeToken != nil { await measureTopStreams() } }
@@ -228,8 +253,8 @@ struct DetailView: View {
                 } else {
                     HeroFacts(score: nil, certification: nil, year: preview.releaseInfo, runtime: nil, genres: [])
                 }
-                if let best = bestOverall, best.quality.isKnown {
-                    HeroQualityLine(quality: effective(best))
+                if let best = ranking.bestOverall, best.quality.isKnown, let q = ranking.bestOverallQuality {
+                    HeroQualityLine(quality: q)
                         .transition(.opacity)
                 }
                 if let d = meta?.description ?? preview.description {
@@ -280,7 +305,7 @@ struct DetailView: View {
             .environment(\.colorScheme, .dark)
             // Meta-only rows (rating, awards, trailer) fade and rise in as the meta arrives.
             .animation(DetailMotion.reveal(reduceMotion), value: info != nil)
-            .animation(DetailMotion.reveal(reduceMotion), value: bestPlayable?.id)
+            .animation(DetailMotion.reveal(reduceMotion), value: ranking.bestPlayableId)
             .opacity(heroShown ? 1 : 0)
             .offset(y: heroShown || reduceMotion ? 0 : 18)
             .onAppear {
@@ -289,7 +314,7 @@ struct DetailView: View {
 
             // "Starring … / Director …" at the bottom right, like the TV app; only when it won't
             // crowd the left column.
-            if heroWidth > 1050, let info, let credits = HeroCredits(people: info.people) {
+            if wideHero, let info, let credits = HeroCredits(people: info.people) {
                 credits
                     .frame(maxWidth: .infinity, alignment: .bottomTrailing)
                     .padding(.trailing, 48)
@@ -298,7 +323,7 @@ struct DetailView: View {
                     .transition(.opacity)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { heroWidth = $0 }
+        .onGeometryChange(for: Bool.self) { $0.size.width > 1050 } action: { wideHero = $0 }
         .animation(DetailMotion.reveal(reduceMotion), value: info != nil)
     }
 
@@ -357,9 +382,10 @@ struct DetailView: View {
                                    description: Text("Choose an episode above to see its streams."))
         } else {
             if !watchLinks.isEmpty { WatchLinksRow(links: watchLinks) }
-            StreamsSection(groups: groups, loading: loadingStreams || (isSeries && meta == nil), measured: measured,
-                           runtimeMinutes: runtimeMinutes,
-                           bestNativeId: bestPlayable?.id,
+            StreamsSection(groups: groups, loading: loadingStreams || (isSeries && meta == nil),
+                           rows: ranking.rows, rowsVersion: ranking.version,
+                           measuredCount: measured.count,
+                           bestNativeId: ranking.bestPlayableId,
                            play: play)
         }
     }
@@ -404,7 +430,7 @@ struct DetailView: View {
 
     /// In progress with a remembered source: the hero offers Resume instead of Play.
     private var resume: ResumeState? {
-        guard let item = library.items[preview.id], item.isInProgress, let src = item.lastSource,
+        guard let item = library.entry(for: preview.id).item, item.isInProgress, let src = item.lastSource,
               src.videoId == item.lastVideoId else { return nil }
         return ResumeState(item: item, source: src, episode: isSeries ? episodes.first { $0.id == src.videoId } : nil)
     }
@@ -462,10 +488,11 @@ struct DetailView: View {
         let m = await store.client.meta(from: store.addons, type: preview.type, id: preview.id)
         meta = m
         info = m.map(TitleInfo.init)
+        recomputeRanking()   // the runtime feeds the bitrate estimates
         if isSeries {
             season = seasons.first ?? 1
             // Resume where you left off, else first episode.
-            let last = library.items[preview.id]?.lastVideoId
+            let last = library.entry(for: preview.id).item?.lastVideoId
             selectedVideo = episodes.first { $0.id == last } ?? episodes.first { $0.season == season }
             if let s = selectedVideo?.season { season = s }
         }
@@ -492,7 +519,7 @@ struct DetailView: View {
             for _ in 0..<4 { next() }   // four at a time
             for await (id, r) in group {
                 if Task.isCancelled { group.cancelAll(); break }
-                if r.measuredFrom != nil { measured[id] = r }
+                if r.measuredFrom != nil { measured[id] = r; recomputeRanking() }
                 next()
             }
         }
@@ -502,6 +529,7 @@ struct DetailView: View {
         guard let id = streamId else { return }
         autoPlayTask?.cancel(); autoPlayTask = nil; checkingSources = nil
         groups = []
+        recomputeRanking()
         watchLinks = []
         addonTrailer = nil
         loadingStreams = true
@@ -531,6 +559,7 @@ struct DetailView: View {
             var seen = Set<String>()
             let playable = g.streams.filter { $0.url != nil && seen.insert($0.id).inserted }
             groups.append(StreamGroup(addon: g.addon, streams: playable, error: g.error))
+            recomputeRanking()
         }
         loadingStreams = false
         if !Task.isCancelled { probeToken = UUID() }
@@ -570,8 +599,11 @@ struct StreamTableRow: Identifiable {
 struct StreamsSection: View {
     let groups: [StreamGroup]
     let loading: Bool
-    let measured: [String: ProbeResult]
-    let runtimeMinutes: Double?
+    /// Rows for every stream, built by the parent when groups, measurements or runtime change.
+    let rows: [StreamTableRow]
+    /// Identifies `rows`, so the filtered view recomputes only when they were rebuilt.
+    let rowsVersion: Int
+    let measuredCount: Int
     let bestNativeId: String?
     let play: (AddonStream) -> Void
 
@@ -589,21 +621,29 @@ struct StreamsSection: View {
         groups.filter { !$0.streams.isEmpty }.map { ($0.addon.id, $0.addon.manifest.name, $0.streams.count) }
     }
 
-    private func makeRows() -> [StreamTableRow] {
-        groups.flatMap { g in
-            g.streams.map { s in
-                let m = measured[s.id]
-                let q = m.map { s.quality.merged(with: $0) } ?? s.quality
-                return StreamTableRow(stream: s, addon: g.addon.manifest.name, addonId: g.addon.id, quality: q, measured: m,
-                                      bitrate: q.estimatedMbps(runtimeMinutes: runtimeMinutes))
-            }
-        }
+    /// Filtered, sorted rows and the "Best" markers for them.
+    private struct Shown {
+        var key: Key?
+        var rows: [StreamTableRow] = []
+        var best = Bests(overall: nil, video: nil, audio: nil, native: nil)
+    }
+    private struct Key: Equatable {
+        let version: Int
+        let filters: StreamFilters
+        let player: StreamFilters.Player
+        let sortOrder: [KeyPathComparator<StreamTableRow>]
+        let native: String?
+    }
+    @State private var cached = Shown()
+
+    private var key: Key {
+        Key(version: rowsVersion, filters: filters, player: player, sortOrder: sortOrder, native: bestNativeId)
     }
 
-    var body: some View {
-        let all = makeRows()
-        let active = effectiveFilters
-        let rows = all.filter { active.matches($0, player: player) }.sorted(using: sortOrder)
+    private func makeShown(_ key: Key) -> Shown {
+        var f = filters
+        if let a = f.addon, !sources.contains(where: { $0.id == a }) { f.addon = nil }
+        let rows = self.rows.filter { f.matches($0, player: player) }.sorted(using: sortOrder)
         // "Best" markers describe what's on screen, so they follow the filters.
         let known = rows.filter { $0.quality.isKnown }
         let best = Bests(
@@ -612,14 +652,24 @@ struct StreamsSection: View {
             audio: known.filter { $0.audioScore > 0 }
                 .max { ($0.audioScore, $0.quality.audioKbps ?? 0) < ($1.audioScore, $1.quality.audioKbps ?? 0) }?.id,
             native: bestNativeId)
+        return Shown(key: key, rows: rows, best: best)
+    }
+
+    var body: some View {
+        let key = key
+        // Filtering and sorting run only when their inputs changed; other invalidations reuse the cache.
+        let shown = cached.key == key ? cached : makeShown(key)
+        let rows = shown.rows
+        let best = shown.best
+        let all = self.rows
 
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("Streams").detailSectionHeader()
                 if loading { ProgressView().controlSize(.small) }
                 else { Text("\(rows.count)").foregroundStyle(.secondary).monospacedDigit() }
-                if !measured.isEmpty {
-                    Label("\(measured.count) measured", systemImage: "checkmark.circle")
+                if measuredCount > 0 {
+                    Label("\(measuredCount) measured", systemImage: "checkmark.circle")
                         .font(.callout).foregroundStyle(.secondary)
                         .help("Specs read from the stream itself (HLS playlist or media tracks), not just its label")
                 }
@@ -660,13 +710,7 @@ struct StreamsSection: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
-    }
-
-    /// The filters in force: an add-on filter is dropped once that add-on has no streams here.
-    private var effectiveFilters: StreamFilters {
-        var f = filters
-        if let a = f.addon, !sources.contains(where: { $0.id == a }) { f.addon = nil }
-        return f
+        .onChange(of: key, initial: true) { _, k in cached = makeShown(k) }
     }
 
     struct Bests { let overall, video, audio, native: String? }

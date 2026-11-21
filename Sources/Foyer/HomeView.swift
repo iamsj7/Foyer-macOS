@@ -50,11 +50,12 @@ struct HomeView: View {
                 if !loading && !rows.isEmpty && lacksTrending {
                     TrendingHint().transition(.opacity)
                 }
-                if type == nil && !library.continueWatching.isEmpty {
+                let continueWatching = library.continueWatching
+                if type == nil && !continueWatching.isEmpty {
                     ShelfHeader(title: "Continue Watching")
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 18) {
-                            ForEach(library.continueWatching) { item in
+                            ForEach(continueWatching) { item in
                                 NavigationLink(value: item.preview) {
                                     LandscapeCard(item: item.preview, progress: item.progress)
                                 }
@@ -65,7 +66,7 @@ struct HomeView: View {
                         .padding(.horizontal, 32)
                     }
                     .scrollTargetBehavior(.viewAligned)
-                    .shelfPaging(ids: library.continueWatching.map(\.id), step: 300 + 18)
+                    .shelfPaging(ids: continueWatching.map(\.id), step: 300 + 18)
                     .padding(.top, -24)
                 }
                 ForEach(rows) { row in

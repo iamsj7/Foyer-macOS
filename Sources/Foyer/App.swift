@@ -4,6 +4,7 @@ import AddonKit
 
 @main
 struct FoyerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var addons = AddonStore()
     @State private var library = LibraryStore()
     @State private var showWhatsNew = false
@@ -50,6 +51,7 @@ struct FoyerApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 720)
+        .playerRestorationDisabled()
 
         // AVPlayer hands streams it can't play to this window automatically, at the same position.
         WindowGroup("Player", for: MPVRequest.self) { $req in
@@ -60,6 +62,7 @@ struct FoyerApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 720)
+        .playerRestorationDisabled()
 
         // ⌘, opens the standard Mac settings window: one toolbar tab per category. The sidebar's
         // Settings page lists the same categories.

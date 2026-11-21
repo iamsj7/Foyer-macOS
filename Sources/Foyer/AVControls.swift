@@ -59,24 +59,12 @@ struct AVControlsBar: View {
     let model: PlayerModel
     @Binding var scrubbing: Double?
 
-    private var shownTime: Double { scrubbing ?? model.position }
-
     var body: some View {
         VStack {
             Spacer()
             VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    Text(format(shownTime)).monospacedDigit()
-                    Slider(value: Binding(get: { shownTime }, set: { scrubbing = $0 }),
-                           in: 0...max(model.duration, 1)) { editing in
-                        if !editing, let t = scrubbing { model.seek(to: t); scrubbing = nil }
-                    }
-                    .controlSize(.small)
-                    .accessibilityLabel("Playback position")
-                    .accessibilityValue(Text("\(format(shownTime)) of \(format(model.duration))"))
-                    Text("-" + format(max(0, model.duration - shownTime))).monospacedDigit()
-                }
-                .font(.callout)
+                AVScrubberRow(model: model, scrubbing: $scrubbing)
+                    .font(.callout)
 
                 HStack(spacing: 16) {
                     optionMenu(model.audioOptions, selected: model.selectedAudio, title: "Audio",
@@ -136,7 +124,7 @@ struct AVControlsBar: View {
             }
             if !model.legibleOptions.isEmpty {
                 Section("In This Stream") {
-                    ForEach(model.legibleOptions, id: \.self) { o in
+                    ForEach(Array(model.legibleOptions.enumerated()), id: \.offset) { _, o in
                         Button {
                             subs.turnOff()
                             model.selectLegible(o)
@@ -164,7 +152,7 @@ struct AVControlsBar: View {
             if allowsOff {
                 Button("Off") { pick(nil) }
             }
-            ForEach(options, id: \.self) { o in
+            ForEach(Array(options.enumerated()), id: \.offset) { _, o in
                 Button { pick(o) } label: {
                     if selected == o { Label(o.displayName, systemImage: "checkmark") } else { Text(o.displayName) }
                 }
@@ -177,6 +165,29 @@ struct AVControlsBar: View {
         .fixedSize()
         .help(title)
         .disabled(options.count < 2)
+    }
+}
+
+/// The clock and scrubber. Only this view reads the position, so the 2 Hz time updates don't
+/// re-evaluate the rest of the bar.
+private struct AVScrubberRow: View {
+    let model: PlayerModel
+    @Binding var scrubbing: Double?
+
+    private var shownTime: Double { scrubbing ?? model.position }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(format(shownTime)).monospacedDigit()
+            Slider(value: Binding(get: { shownTime }, set: { scrubbing = $0 }),
+                   in: 0...max(model.duration, 1)) { editing in
+                if !editing, let t = scrubbing { model.seek(to: t); scrubbing = nil }
+            }
+            .controlSize(.small)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue(Text("\(format(shownTime)) of \(format(model.duration))"))
+            Text("-" + format(max(0, model.duration - shownTime))).monospacedDigit()
+        }
     }
 
     private func format(_ t: Double) -> String {

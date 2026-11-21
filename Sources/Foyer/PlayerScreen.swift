@@ -29,10 +29,10 @@ final class PlayerModel: PlaybackControls {
     let subtitles = SubtitleController()
     private(set) var isPaused = false
 
-    private var statusObservation: NSKeyValueObservation?
-    private var rateObservation: NSKeyValueObservation?
-    private var bufferObservation: NSKeyValueObservation?
-    private var timeObserver: Any?
+    @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    @ObservationIgnored private var rateObservation: NSKeyValueObservation?
+    @ObservationIgnored private var bufferObservation: NSKeyValueObservation?
+    @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var fastTimeObserver: Any?
 
     // MARK: State for our control bar
@@ -50,10 +50,11 @@ final class PlayerModel: PlaybackControls {
     @ObservationIgnored private var pip: AVPictureInPictureController?
     @ObservationIgnored private var pipObservation: NSKeyValueObservation?
     @ObservationIgnored private var pipDelegate: PiPDelegate?
-    private var notificationTokens: [NSObjectProtocol] = []
-    private var commandTokens: [(MPRemoteCommand, Any)] = []
-    private var artwork: MPMediaItemArtwork?
-    private var didStart = false
+    @ObservationIgnored private var notificationTokens: [NSObjectProtocol] = []
+    @ObservationIgnored private var commandTokens: [(MPRemoteCommand, Any)] = []
+    @ObservationIgnored private var artwork: MPMediaItemArtwork?
+    @ObservationIgnored private var didStart = false
+    @ObservationIgnored private var terminateToken: NSObjectProtocol?
 
     init(request: PlayRequest) { self.request = request }
 
@@ -140,6 +141,12 @@ final class PlayerModel: PlaybackControls {
             forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.saveProgress(library) }
         })
+        // SwiftUI doesn't call onDisappear when the app quits; save the position then.
+        terminateToken = NotificationCenter.default.addObserver(
+            forName: .foyerWillTerminate, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveProgress(library) }
+        }
+        NowPlaying.claim(self)
         setUpRemoteCommands()
         loadArtwork()
         subtitles.attach(player: player, request: request)
@@ -220,9 +227,7 @@ final class PlayerModel: PlaybackControls {
         if !request.subtitle.isEmpty { info[MPMediaItemPropertyArtist] = request.subtitle }
         if item.duration.isNumeric { info[MPMediaItemPropertyPlaybackDuration] = item.duration.seconds }
         if let artwork { info[MPMediaItemPropertyArtwork] = artwork }
-        let center = MPNowPlayingInfoCenter.default()
-        center.nowPlayingInfo = info
-        center.playbackState = player.timeControlStatus == .paused ? .paused : .playing
+        NowPlaying.publish(self, info: info, paused: player.timeControlStatus == .paused)
     }
 
     private func setUpRemoteCommands() {
@@ -380,8 +385,8 @@ final class PlayerModel: PlaybackControls {
         notificationTokens = []
         commandTokens.forEach { $0.0.removeTarget($0.1) }
         commandTokens = []
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        if let t = terminateToken { NotificationCenter.default.removeObserver(t); terminateToken = nil }
+        NowPlaying.release(self)
         player.replaceCurrentItem(with: nil)
     }
 }

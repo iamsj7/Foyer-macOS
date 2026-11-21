@@ -54,6 +54,8 @@ final class MPVCore: @unchecked Sendable {
     private let onEvent: (@Sendable (Event) -> Void)?
     /// mpv keeps the layer's address as "wid" without retaining it; hold it until mpv is destroyed.
     private let layer: CAMetalLayer
+    /// Last time-pos forwarded to `onEvent`; touched only on `queue`.
+    private var lastForwardedTime: Double?
 
     init?(layer: CAMetalLayer, hdr: Bool, onEvent: @escaping @Sendable (Event) -> Void) {
         self.layer = layer
@@ -191,7 +193,15 @@ final class MPVCore: @unchecked Sendable {
                     let name = String(cString: p.name)
                     switch p.format {
                     case MPV_FORMAT_DOUBLE:
-                        if let d = p.data { self.onEvent?(.double(name, d.assumingMemoryBound(to: Double.self).pointee)) }
+                        guard let d = p.data else { continue }
+                        let value = d.assumingMemoryBound(to: Double.self).pointee
+                        if name == "time-pos" {
+                            // mpv reports every frame; the model needs ~4 updates a second, so don't
+                            // wake the main thread for the rest.
+                            if let last = self.lastForwardedTime, value >= last, value - last < 0.25 { continue }
+                            self.lastForwardedTime = value
+                        }
+                        self.onEvent?(.double(name, value))
                     case MPV_FORMAT_FLAG:
                         if let d = p.data { self.onEvent?(.flag(name, d.assumingMemoryBound(to: Int32.self).pointee != 0)) }
                     case MPV_FORMAT_INT64:
@@ -225,10 +235,17 @@ final class MPVCore: @unchecked Sendable {
     }
 
     deinit {
-        // Safety net if shutdown() was never called; normally `handle` is already nil here.
+        // Safety net if shutdown() was never called; normally `handle` is already nil here. The
+        // wakeup callback points at this object, so it's cleared before deinit returns. The last
+        // reference can drop on the main thread, so the destroy runs elsewhere (see shutdown()); the
+        // block holds the layer because mpv keeps its address without retaining it.
         if let h = handle {
             mpv_set_wakeup_callback(h, nil, nil)
-            mpv_terminate_destroy(h)
+            let layer = layer
+            DispatchQueue.global(qos: .utility).async {
+                mpv_terminate_destroy(h)
+                withExtendedLifetime(layer) {}
+            }
         }
     }
 }
@@ -376,7 +393,7 @@ struct MPVTrack: Identifiable, Hashable {
 final class MPVPlayerModel: PlaybackControls {
     let request: PlayRequest
     let host = MPVHostView(frame: .init(x: 0, y: 0, width: 1280, height: 720))
-    private var core: MPVCore?
+    @ObservationIgnored private var core: MPVCore?
 
     var position: Double = 0
     var duration: Double = 0
@@ -398,8 +415,9 @@ final class MPVPlayerModel: PlaybackControls {
     /// Per window: a forced shape is usually for one film, so it isn't remembered.
     var aspect: AspectPreset = .auto { didSet { host.aspectOverride = aspect.ratio } }
 
-    private var lastSaved = Date.distantPast
-    private var commandTokens: [(MPRemoteCommand, Any)] = []
+    @ObservationIgnored private var lastSaved = Date.distantPast
+    @ObservationIgnored private var commandTokens: [(MPRemoteCommand, Any)] = []
+    @ObservationIgnored private var terminateToken: NSObjectProtocol?
 
     init(request: PlayRequest) {
         self.request = request
@@ -425,6 +443,12 @@ final class MPVPlayerModel: PlaybackControls {
                 self.failure = "This source didn't start in time."
             }
         }
+        // SwiftUI doesn't call onDisappear when the app quits; save the position then.
+        terminateToken = NotificationCenter.default.addObserver(
+            forName: .foyerWillTerminate, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveProgress(library) }
+        }
+        NowPlaying.claim(self)
         setUpRemoteCommands()
     }
 
@@ -497,8 +521,7 @@ final class MPVPlayerModel: PlaybackControls {
         ]
         if !request.subtitle.isEmpty { info[MPMediaItemPropertyArtist] = request.subtitle }
         if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = paused ? .paused : .playing
+        NowPlaying.publish(self, info: info, paused: paused)
     }
 
     private func setUpRemoteCommands() {
@@ -525,8 +548,8 @@ final class MPVPlayerModel: PlaybackControls {
         saveProgress(library)
         commandTokens.forEach { $0.0.removeTarget($0.1) }
         commandTokens = []
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        if let t = terminateToken { NotificationCenter.default.removeObserver(t); terminateToken = nil }
+        NowPlaying.release(self)
         core?.shutdown()
         core = nil
     }
@@ -659,23 +682,12 @@ struct MPVControls: View {
     let model: MPVPlayerModel
     @Binding var scrubbing: Double?
 
-    private var shownTime: Double { scrubbing ?? model.position }
-
     var body: some View {
         VStack {
             Spacer()
             VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    Text(format(shownTime)).monospacedDigit()
-                    Slider(value: Binding(get: { shownTime }, set: { scrubbing = $0 }),
-                           in: 0...max(model.duration, 1)) { editing in
-                        if !editing, let t = scrubbing { model.seek(to: t); scrubbing = nil }
-                    }
-                    .controlSize(.small)
-                    .accessibilityLabel("Playback position")
-                    Text("-" + format(max(0, model.duration - shownTime))).monospacedDigit()
-                }
-                .font(.callout)
+                MPVScrubberRow(model: model, scrubbing: $scrubbing)
+                    .font(.callout)
 
                 HStack(spacing: 16) {
                     trackMenu(type: "audio", systemImage: "speaker.wave.2", title: "Audio")
@@ -737,6 +749,28 @@ struct MPVControls: View {
         .fixedSize()
         .help(title)
         .disabled(list.isEmpty && type == "audio")
+    }
+}
+
+/// The clock and scrubber. Only this view reads the position, so the 4 Hz time updates don't
+/// re-evaluate the rest of the bar (track menus included).
+private struct MPVScrubberRow: View {
+    let model: MPVPlayerModel
+    @Binding var scrubbing: Double?
+
+    private var shownTime: Double { scrubbing ?? model.position }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(format(shownTime)).monospacedDigit()
+            Slider(value: Binding(get: { shownTime }, set: { scrubbing = $0 }),
+                   in: 0...max(model.duration, 1)) { editing in
+                if !editing, let t = scrubbing { model.seek(to: t); scrubbing = nil }
+            }
+            .controlSize(.small)
+            .accessibilityLabel("Playback position")
+            Text("-" + format(max(0, model.duration - shownTime))).monospacedDigit()
+        }
     }
 
     private func format(_ t: Double) -> String {

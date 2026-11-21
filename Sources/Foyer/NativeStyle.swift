@@ -89,17 +89,6 @@ struct ArtworkScrim: View {
     }
 }
 
-/// Fills its frame with remote artwork; quiet placeholder while loading.
-struct Artwork: View {
-    let url: URL?
-    var body: some View {
-        AsyncImage(url: url, transaction: .init(animation: .easeOut(duration: 0.3))) { phase in
-            if let img = phase.image { img.resizable().aspectRatio(contentMode: .fill) }
-            else { Rectangle().fill(.quaternary) }
-        }
-    }
-}
-
 // MARK: - Motion
 
 /// One motion vocabulary for the app. Springs retarget from their current velocity, so hover and

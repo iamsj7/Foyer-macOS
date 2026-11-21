@@ -219,7 +219,7 @@ struct LibrarySettings: View {
             }
             Section {
                 Button("Clear Watch History…") { confirm = .history }
-                    .disabled(library.items.values.allSatisfy { $0.position == 0 })
+                    .disabled(!library.hasHistory)
                 Button("Remove All Saved Titles…", role: .destructive) { confirm = .saved }
                     .disabled(library.saved.isEmpty)
             } footer: {
