@@ -20,6 +20,8 @@ enum WhatsNew {
                   detail: "If a stream fails, Foyer moves to the next best source at the same spot. Resume checks your last source first."),
             .init(symbol: "line.3.horizontal.decrease.circle.fill", tint: .blue, title: "Stream filters",
                   detail: "Narrow the stream list by quality, HDR, audio, AirPlay & Picture in Picture, and add-on."),
+            .init(symbol: "gauge.with.dots.needle.67percent", tint: .purple, title: "Smoother and lighter",
+                  detail: "Pages stay fluid while something plays, artwork uses less memory, and quitting saves exactly where you stopped."),
             .init(symbol: "gearshape.fill", tint: .gray, title: "Organised Settings",
                   detail: "Settings are grouped into Add-ons, Playback, Subtitles, Library, Storage and About."),
         ]),
